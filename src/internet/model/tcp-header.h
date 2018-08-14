@@ -226,6 +226,20 @@ class TcpHeader : public Header
                             uint8_t protocol);
 
     /**
+     * @brief Check if the header has the option (kind=EXPERIMENTAL) with specified magicNumber
+     * @param magicNumber the magic number experimental option to check for
+     * @return true if the header has the experimental option with specified magicNumber, false otherwise
+     */
+    bool HasExperimentalOption(uint16_t magicNumber) const;
+
+    /**
+     * @brief Get the option (kind=EXPERIMENTAL) with specified magicNumber
+     * @param magicNumber the magic number in experimental option to retrieve
+     * @return the experimental option with the specified magicNumber, or nullptr
+     */
+    Ptr<const TcpOption> GetExperimentalOption(uint16_t magicNumber) const;
+
+    /**
      * @brief Initialize the TCP checksum.
      *
      * If you want to use tcp checksums, you should call this
