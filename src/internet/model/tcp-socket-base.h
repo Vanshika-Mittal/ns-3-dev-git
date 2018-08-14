@@ -652,6 +652,19 @@ class TcpSocketBase : public TcpSocket
     void DecodeAccEcnData(const TcpHeader& tcpHeader);
 
     /**
+     * @brief Process AccEcn option, update sender side AccECN counters
+     * @param option AccEcn option read from the header
+     * @param newlyAckedB the newly acked byte number
+     */
+    void ProcessOptionAccEcn(const Ptr<const TcpOption> option, uint32_t newlyAckedB);
+
+    /**
+     * @brief Add AccEcn option in TCP header
+     * @param header TcpHeader to add the option to
+     */
+    void AddOptionAccEcn(TcpHeader& header);
+
+    /**
      * @brief Set ECN mode of use on the socket
      *
      * @param useEcn Mode of ECN to use.
