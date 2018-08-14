@@ -5101,6 +5101,7 @@ TcpSocketBase::DecodeAccEcnData(const TcpHeader& tcpHeader)
     NS_ASSERT(m_ecnMode == EcnMode_t::AccEcn);
 
     bool hasOptionTS = tcpHeader.HasOption(TcpOption::TS);
+    bool hasOptionAccEcn = tcpHeader.HasExperimentalOption(TcpOptionExperimental::ACCECN);
 
     uint32_t newlyAckedB = tcpHeader.GetAckNumber() - m_highRxAckMark;
 
@@ -5129,15 +5130,23 @@ TcpSocketBase::DecodeAccEcnData(const TcpHeader& tcpHeader)
                              ? (newlyAckedPkt - ((newlyAckedPkt - cepD) % DIVACE))
                              : cepD;
 
-    if ((newlyAckedB > 0) || (newlyAckedB == 0 && newlyAckedT))
+    if (!hasOptionAccEcn)
     {
-        if (newlyAckedPkt < cepD)
+        if ((newlyAckedB > 0) || (newlyAckedB == 0 && newlyAckedT))
         {
-            cepDsafer = cepD;
+            if (newlyAckedPkt < cepD)
+            {
+                cepDsafer = cepD;
+            }
+            m_accEcnData->m_ecnCepS += cepDsafer;
         }
-        m_accEcnData->m_ecnCepS += cepDsafer;
+        NS_LOG_INFO("Decoded AccECN ACE field, s.cep=" << m_accEcnData->m_ecnCepS);
     }
-    NS_LOG_INFO("Decoded AccECN ACE field, s.cep=" << m_accEcnData->m_ecnCepS);
+    else
+    {
+        Ptr<const TcpOption> option = tcpHeader.GetExperimentalOption(TcpOptionExperimental::ACCECN);
+        ProcessOptionAccEcn(option, newlyAckedB);
+    }
 }
 
 void
