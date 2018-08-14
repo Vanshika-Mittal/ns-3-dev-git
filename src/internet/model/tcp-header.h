@@ -61,7 +61,7 @@ class TcpHeader : public Header
      *
      * @return the generated string
      **/
-    static std::string FlagsToString(uint8_t flags, const std::string& delimiter = "|");
+    static std::string FlagsToString(uint16_t flags, const std::string& delimiter = "|");
 
     /**
      * @brief Enable checksum calculation for TCP
@@ -100,7 +100,7 @@ class TcpHeader : public Header
      * @brief Set flags of the header
      * @param flags the flags for this TcpHeader
      */
-    void SetFlags(uint8_t flags);
+    void SetFlags(uint16_t flags);
 
     /**
      * @brief Set the window size
@@ -154,7 +154,7 @@ class TcpHeader : public Header
      * @brief Get the flags
      * @return the flags for this TcpHeader
      */
-    uint8_t GetFlags() const;
+    uint16_t GetFlags() const;
 
     /**
      * @brief Get the window size
@@ -262,17 +262,18 @@ class TcpHeader : public Header
     /**
      * @brief TCP flag field values
      */
-    enum Flags_t
+    enum Flags_t : uint16_t
     {
-        NONE = 0, //!< No flags
-        FIN = 1,  //!< FIN
-        SYN = 2,  //!< SYN
-        RST = 4,  //!< Reset
-        PSH = 8,  //!< Push
-        ACK = 16, //!< Ack
-        URG = 32, //!< Urgent
-        ECE = 64, //!< ECE
-        CWR = 128 //!< CWR
+        NONE = 0,   //!< No flags
+        FIN = 1,    //!< FIN
+        SYN = 2,    //!< SYN
+        RST = 4,    //!< Reset
+        PSH = 8,    //!< Push
+        ACK = 16,   //!< Ack
+        URG = 32,   //!< Urgent
+        ECE = 64,   //!< ECE
+        CWR = 128,  //!< CWR
+        AE = 256    //!< AE (bit 2 of ACE counter / RFC 793 Reserved bit 7)
     };
 
     /**
@@ -323,7 +324,7 @@ class TcpHeader : public Header
     SequenceNumber32 m_sequenceNumber{0}; //!< Sequence number
     SequenceNumber32 m_ackNumber{0};      //!< ACK number
     uint8_t m_length{5};                  //!< Length (really a uint4_t) in words.
-    uint8_t m_flags{0};                   //!< Flags (really a uint6_t)
+    uint16_t m_flags{0};                   //!< Flags (really a uint6_t)
     uint16_t m_windowSize{0xffff};        //!< Window size
     uint16_t m_urgentPointer{0};          //!< Urgent pointer
 
