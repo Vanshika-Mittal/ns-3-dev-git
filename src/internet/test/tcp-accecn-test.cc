@@ -19,6 +19,7 @@
 #include "ns3/simple-channel.h"
 #include "ns3/tcp-accecn-data.h"
 #include "ns3/tcp-header.h"
+#include "ns3/tcp-option-accecn.h"
 #include "ns3/tcp-l4-protocol.h"
 #include "ns3/tcp-rx-buffer.h"
 #include "ns3/tcp-socket-base.h"
@@ -154,6 +155,17 @@ class TcpSocketAccEcnCustom : public TcpSocketMsgBase
             header.SetDestinationPort(m_endPoint6->GetPeerPort());
         }
         AddOptions(header);
+
+        bool hasSyn = flags & TcpHeader::SYN;
+        bool hasAck = flags & TcpHeader::ACK;
+        bool addAccEcnOption =
+            (hasSyn && hasAck) || (!hasSyn && hasAck && !m_connected) ||
+            !m_accEcnData->m_useDelAckAccEcn;
+        if (m_ecnMode == EcnMode_t::AccEcn && addAccEcnOption)
+        {
+            AddOptionAccEcn(header);
+            m_accEcnData->m_useDelAckAccEcn = true;
+        }
 
         m_rto = Max(m_rtt->GetEstimate() + Max(m_clockGranularity, m_rtt->GetVariation() * 4),
                     m_minRto);
