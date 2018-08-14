@@ -437,6 +437,50 @@ TcpHeaderFlagsToString::DoRun()
     str = TcpHeader::FlagsToString(0xff, ":");
     target = "FIN:SYN:RST:PSH:ACK:URG:ECE:CWR";
     NS_TEST_ASSERT_MSG_EQ(str, target, "str " << str << " does not equal target " << target);
+    str = TcpHeader::FlagsToString(0x1ff);
+    target = "FIN|SYN|RST|PSH|ACK|URG|ECE|CWR|AE";
+    NS_TEST_ASSERT_MSG_EQ(str, target, "str " << str << " does not equal target " << target);
+}
+
+/**
+ * @ingroup internet-test
+ *
+ * @brief Test 16-bit flags and AccECN AE flag serialization.
+ */
+class TcpHeaderFlags16Test : public TestCase
+{
+  public:
+    TcpHeaderFlags16Test();
+
+  private:
+    void DoRun() override;
+};
+
+TcpHeaderFlags16Test::TcpHeaderFlags16Test()
+    : TestCase("Testing 16-bit Flags and AccECN AE bit")
+{
+}
+
+void
+TcpHeaderFlags16Test::DoRun()
+{
+    TcpHeader h;
+    h.SetFlags(TcpHeader::AE);
+    NS_TEST_ASSERT_MSG_EQ(h.GetFlags(), TcpHeader::AE, "AE flag mismatch");
+
+    // Test AccECN SYN combination: SYN (2) | ECE (64) | CWR (128) | AE (256) = 450
+    uint16_t accEcnSyn = TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR | TcpHeader::AE;
+    h.SetFlags(accEcnSyn);
+    NS_TEST_ASSERT_MSG_EQ(h.GetFlags(), 450, "AccECN SYN flag combination mismatch");
+
+    // Serialization & Deserialization round-trip
+    Buffer buffer;
+    buffer.AddAtStart(h.GetSerializedSize());
+    h.Serialize(buffer.Begin());
+
+    TcpHeader deserialized;
+    deserialized.Deserialize(buffer.Begin());
+    NS_TEST_ASSERT_MSG_EQ(deserialized.GetFlags(), 450, "Deserialization flag mismatch");
 }
 
 /**
@@ -455,6 +499,7 @@ class TcpHeaderTestSuite : public TestSuite
                     TestCase::Duration::QUICK);
         AddTestCase(new TcpHeaderFlagsToString("Test flags to string function"),
                     TestCase::Duration::QUICK);
+        AddTestCase(new TcpHeaderFlags16Test(), TestCase::Duration::QUICK);
     }
 };
 
