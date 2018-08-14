@@ -2921,6 +2921,7 @@ TcpSocketBase::SendEmptyPacket(uint16_t flags)
     {
         header.SetFlags(flags);
     }
+
     header.SetSequenceNumber(s);
     header.SetAckNumber(m_tcb->m_rxBuffer->NextRxSequence());
     if (m_endPoint != nullptr)
@@ -2942,7 +2943,17 @@ TcpSocketBase::SendEmptyPacket(uint16_t flags)
     uint16_t windowSize = AdvertisedWindowSize();
     bool hasSyn = flags & TcpHeader::SYN;
     bool hasFin = flags & TcpHeader::FIN;
+    bool hasAck = flags & TcpHeader::ACK;
     bool isAck = flags == TcpHeader::ACK;
+
+    bool addAccEcnOption =
+        (hasSyn && hasAck) || (!hasSyn && hasAck && !m_connected) || !m_accEcnData->m_useDelAckAccEcn;
+    if (m_ecnMode == EcnMode_t::AccEcn && addAccEcnOption)
+    {
+        AddOptionAccEcn(header);
+        m_accEcnData->m_useDelAckAccEcn = true;
+    }
+
     if (hasSyn)
     {
         if (m_winScalingEnabled)
@@ -3381,6 +3392,13 @@ TcpSocketBase::SendDataPacket(SequenceNumber32 seq, uint32_t maxSize, bool withA
                           << Simulator::Now().GetSeconds() << " to expire at time "
                           << (Simulator::Now() + m_rto.Get()).GetSeconds());
         m_retxEvent = Simulator::Schedule(m_rto, &TcpSocketBase::ReTxTimeout, this);
+    }
+
+    if ((!m_accEcnData->m_useDelAckAccEcn || seq == SequenceNumber32(1)) &&
+        m_ecnMode == EcnMode_t::AccEcn)
+    {
+        AddOptionAccEcn(header);
+        m_accEcnData->m_useDelAckAccEcn = true;
     }
 
     m_txTrace(p, header, this);
