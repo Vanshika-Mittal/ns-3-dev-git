@@ -36,3 +36,15 @@ build_lib_example(
     ${libnetwork}
     ${libpoint-to-point}
 )
+
+build_lib_example(
+  NAME accecn-example
+  SOURCE_FILES examples/tcp-accecn-example.cc
+  LIBRARIES_TO_LINK
+    ${libnetwork}
+    ${libinternet}
+    ${libpoint-to-point}
+    ${libapplications}
+    ${libflow-monitor}
+    ${libtraffic-control}
+)

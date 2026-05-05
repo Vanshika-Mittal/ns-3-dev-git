@@ -61,7 +61,7 @@ class TcpHeader : public Header
      *
      * @return the generated string
      **/
-    static std::string FlagsToString(uint8_t flags, const std::string& delimiter = "|");
+    static std::string FlagsToString(uint16_t flags, const std::string& delimiter = "|");
 
     /**
      * @brief Enable checksum calculation for TCP
@@ -100,7 +100,7 @@ class TcpHeader : public Header
      * @brief Set flags of the header
      * @param flags the flags for this TcpHeader
      */
-    void SetFlags(uint8_t flags);
+    void SetFlags(uint16_t flags);
 
     /**
      * @brief Set the window size
@@ -154,7 +154,7 @@ class TcpHeader : public Header
      * @brief Get the flags
      * @return the flags for this TcpHeader
      */
-    uint8_t GetFlags() const;
+    uint16_t GetFlags() const;
 
     /**
      * @brief Get the window size
@@ -174,6 +174,13 @@ class TcpHeader : public Header
      * @return Whether the header contains a specific kind of option, or 0
      */
     Ptr<const TcpOption> GetOption(uint8_t kind) const;
+
+    /**
+     * @brief Get the experimental option specified
+     * @param magicNumber the magic number of the option to retrieve
+     * @return The option if found, or 0
+     */
+    Ptr<const TcpOption> GetExperimentalOption(uint16_t magicNumber) const;
 
     /**
      * @brief Get the list of option in this header
@@ -199,6 +206,13 @@ class TcpHeader : public Header
      * @return true if the header has the option, false otherwise
      */
     bool HasOption(uint8_t kind) const;
+
+    /**
+     * @brief Check if the header has the experimental option specified
+     * @param magicNumber Magic number of option to check for
+     * @return true if the header has the experimental option, false otherwise
+     */
+    bool HasExperimentalOption(uint16_t magicNumber) const;
 
     /**
      * @brief Append an option to the TCP header
@@ -272,7 +286,8 @@ class TcpHeader : public Header
         ACK = 16, //!< Ack
         URG = 32, //!< Urgent
         ECE = 64, //!< ECE
-        CWR = 128 //!< CWR
+        CWR = 128,//!< CWR
+        AE = 256  //!< AE
     };
 
     /**
@@ -323,7 +338,7 @@ class TcpHeader : public Header
     SequenceNumber32 m_sequenceNumber{0}; //!< Sequence number
     SequenceNumber32 m_ackNumber{0};      //!< ACK number
     uint8_t m_length{5};                  //!< Length (really a uint4_t) in words.
-    uint8_t m_flags{0};                   //!< Flags (really a uint6_t)
+    uint16_t m_flags{0};                  //!< Flags
     uint16_t m_windowSize{0xffff};        //!< Window size
     uint16_t m_urgentPointer{0};          //!< Urgent pointer
 

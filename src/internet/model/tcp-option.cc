@@ -13,6 +13,7 @@
 #include "tcp-option-sack.h"
 #include "tcp-option-ts.h"
 #include "tcp-option-winscale.h"
+#include "tcp-option-accecn.h"
 
 #include "ns3/log.h"
 #include "ns3/type-id.h"
@@ -86,6 +87,7 @@ TcpOption::IsKindKnown(uint8_t kind)
     case SACKPERMITTED:
     case SACK:
     case TS:
+    case EXPERIMENTAL:
         // Do not add UNKNOWN here
         return true;
     }
@@ -167,6 +169,74 @@ uint8_t
 TcpOptionUnknown::GetKind() const
 {
     return m_kind;
+}
+
+NS_OBJECT_ENSURE_REGISTERED(TcpOptionExperimental);
+
+TypeId
+TcpOptionExperimental::GetTypeId()
+{
+    static TypeId tid = TypeId("ns3::TcpOptionExperimental")
+                            .SetParent<TcpOption>()
+                            .SetGroupName("Internet");
+    return tid;
+}
+
+TcpOptionExperimental::TcpOptionExperimental()
+    : TcpOption()
+{
+}
+
+TcpOptionExperimental::~TcpOptionExperimental()
+{
+}
+
+TypeId
+TcpOptionExperimental::GetInstanceTypeId() const
+{
+    return GetTypeId();
+}
+
+uint8_t
+TcpOptionExperimental::GetKind() const
+{
+    return TcpOption::EXPERIMENTAL;
+}
+
+bool
+TcpOptionExperimental::IsExIDKnown(uint16_t magicNumber)
+{
+    switch (magicNumber)
+    {
+    case ACCECN:
+        return true;
+    }
+    return false;
+}
+
+Ptr<TcpOption>
+TcpOptionExperimental::CreateOptionExperimental(uint16_t exid)
+{
+    struct exidToTid
+    {
+        TcpOptionExperimental::ExID exid;
+        TypeId tid;
+    };
+
+    static ObjectFactory objectFactory;
+    static exidToTid toTid[] = {
+        {TcpOptionExperimental::ACCECN, TcpOptionAccEcn::GetTypeId()},
+    };
+
+    for (unsigned int i = 0; i < sizeof(toTid) / sizeof(exidToTid); ++i)
+    {
+        if (toTid[i].exid == exid)
+        {
+            objectFactory.SetTypeId(toTid[i].tid);
+            return objectFactory.Create<TcpOption>();
+        }
+    }
+    return CreateObject<TcpOptionUnknown>();
 }
 
 } // namespace ns3

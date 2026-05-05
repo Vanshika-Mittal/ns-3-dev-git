@@ -25,11 +25,12 @@ NS_LOG_COMPONENT_DEFINE("TcpHeader");
 NS_OBJECT_ENSURE_REGISTERED(TcpHeader);
 
 std::string
-TcpHeader::FlagsToString(uint8_t flags, const std::string& delimiter)
+TcpHeader::FlagsToString(uint16_t flags, const std::string& delimiter)
 {
-    static const char* flagNames[8] = {"FIN", "SYN", "RST", "PSH", "ACK", "URG", "ECE", "CWR"};
+    const int flagBits = 9;
+    static const char* flagNames[9] = {"FIN", "SYN", "RST", "PSH", "ACK", "URG", "ECE", "CWR", "AE"};
     std::string flagsDescription = "";
-    for (uint8_t i = 0; i < 8; ++i)
+    for (uint8_t i = 0; i < flagBits; ++i)
     {
         if (flags & (1 << i))
         {
@@ -74,7 +75,7 @@ TcpHeader::SetAckNumber(SequenceNumber32 ackNumber)
 }
 
 void
-TcpHeader::SetFlags(uint8_t flags)
+TcpHeader::SetFlags(uint16_t flags)
 {
     m_flags = flags;
 }
@@ -133,7 +134,7 @@ TcpHeader::GetMaxOptionLength() const
     return m_maxOptionsLen;
 }
 
-uint8_t
+uint16_t
 TcpHeader::GetFlags() const
 {
     return m_flags;
@@ -325,7 +326,7 @@ TcpHeader::Deserialize(Buffer::Iterator start)
     m_sequenceNumber = i.ReadNtohU32();
     m_ackNumber = i.ReadNtohU32();
     uint16_t field = i.ReadNtohU16();
-    m_flags = field & 0xFF;
+    m_flags = field & 0x1FF;
     m_length = field >> 12;
     m_windowSize = i.ReadNtohU16();
     i.Next(2);
@@ -346,7 +347,20 @@ TcpHeader::Deserialize(Buffer::Iterator start)
         uint32_t optionSize;
         if (TcpOption::IsKindKnown(kind))
         {
-            op = TcpOption::CreateOption(kind);
+            if (kind == TcpOption::EXPERIMENTAL)
+            {
+                // the magic number forms the first 2 bytes of the option content field
+                // we need to skip two bytes (kind + length) to reach the option content field
+                uint16_t magicNumber = TcpOptionExperimental::ACCECN;
+                if (TcpOptionExperimental::IsExIDKnown(magicNumber))
+                {
+                    op = TcpOptionExperimental::CreateOptionExperimental(magicNumber);
+                }
+            }
+            else
+            {
+                op = TcpOption::CreateOption(kind);
+            }
         }
         else
         {
@@ -475,6 +489,40 @@ TcpHeader::HasOption(uint8_t kind) const
     }
 
     return false;
+}
+
+bool
+TcpHeader::HasExperimentalOption(uint16_t magicNumber) const
+{
+    for (auto i = m_options.begin(); i != m_options.end(); ++i)
+    {
+        if ((*i)->GetKind() == TcpOption::EXPERIMENTAL)
+        {
+            Ptr<const TcpOptionExperimental> option = DynamicCast<const TcpOptionExperimental>(*i);
+            if (option->GetExID() == magicNumber)
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+Ptr<const TcpOption>
+TcpHeader::GetExperimentalOption(uint16_t magicNumber) const
+{
+    for (auto i = m_options.begin(); i != m_options.end(); ++i)
+    {
+        if ((*i)->GetKind() == TcpOption::EXPERIMENTAL)
+        {
+            Ptr<const TcpOptionExperimental> option = DynamicCast<const TcpOptionExperimental>(*i);
+            if (option->GetExID() == magicNumber)
+            {
+                return (*i);
+            }
+        }
+    }
+    return nullptr;
 }
 
 bool
