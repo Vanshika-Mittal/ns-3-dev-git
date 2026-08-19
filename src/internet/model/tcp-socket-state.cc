@@ -1,7 +1,13 @@
 /*
  * Copyright (c) 2018 Natale Patriciello <natale.patriciello@gmail.com>
+ * Copyright (c) 2018 Tsinghua University
+ * Copyright (c) 2018 NITK Surathkal
  *
  * SPDX-License-Identifier: GPL-2.0-only
+ *
+ * Author: Natale Patriciello <natale.patriciello@gmail.com>
+ *         Wenying Dai <dwy927@gmail.com>
+ *         Mohit P. Tahiliani <tahiliani.nitk@gmail.com>
  */
 #include "tcp-socket-state.h"
 
@@ -106,6 +112,7 @@ TcpSocketState::TcpSocketState(const TcpSocketState& other)
       m_sackEnabled(other.m_sackEnabled),
       m_congState(other.m_congState),
       m_ecnState(other.m_ecnState),
+      m_isEcnBitFlipped(other.m_isEcnBitFlipped),
       m_highTxMark(other.m_highTxMark),
       m_nextTxSequence(other.m_nextTxSequence),
       m_rcvTimestampValue(other.m_rcvTimestampValue),
@@ -138,13 +145,15 @@ const char* const TcpSocketState::TcpCongStateName[TcpSocketState::CA_LAST_STATE
     "CA_LOSS",
 };
 
-const char* const TcpSocketState::EcnStateName[TcpSocketState::ECN_CWR_SENT + 1] = {
+const char* const TcpSocketState::EcnStateName[TcpSocketState::ECN_ECT1_RCVD + 1] = {
     "ECN_DISABLED",
     "ECN_IDLE",
     "ECN_CE_RCVD",
     "ECN_SENDING_ECE",
     "ECN_ECE_RCVD",
     "ECN_CWR_SENT",
+    "ECN_ECT0_RCVD",
+    "ECN_ECT1_RCVD",
 };
 
 } // namespace ns3
