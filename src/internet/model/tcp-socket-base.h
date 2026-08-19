@@ -1,16 +1,21 @@
 /*
  * Copyright (c) 2007 Georgia Tech Research Corporation
  * Copyright (c) 2010 Adrian Sai-wah Tam
+ * Copyright (c) 2018 Tsinghua University
+ * Copyright (c) 2018 NITK Surathkal
  *
  * SPDX-License-Identifier: GPL-2.0-only
  *
  * Author: Adrian Sai-wah Tam <adrian.sw.tam@gmail.com>
+ *         Wenying Dai <dwy927@gmail.com>
+ *         Mohit P. Tahiliani <tahiliani.nitk@gmail.com>
  */
 #ifndef TCP_SOCKET_BASE_H
 #define TCP_SOCKET_BASE_H
 
 #include "ipv4-header.h"
 #include "ipv6-header.h"
+#include "tcp-accecn-data.h"
 #include "tcp-socket-state.h"
 #include "tcp-socket.h"
 
@@ -586,6 +591,68 @@ class TcpSocketBase : public TcpSocket
     }
 
     /**
+     * @brief ECN Modes
+     */
+    enum EcnMode_t
+    {
+        NoEcn = 0,
+        ClassicEcn = 1,
+        EcnPp = 2,
+        AccEcn = 3
+    };
+
+    /**
+     * @brief Literal names of ECN modes for use in log messages
+     */
+    INTERNET_EXPORT static const char* const EcnModeName[AccEcn + 1];
+
+    /**
+     * @brief Set ECN mode to use on the socket
+     * @param ecnMode Mode of ECN to use
+     */
+    void SetEcnMode(EcnMode_t ecnMode);
+
+    /**
+     * @brief Get ECN mode of the socket
+     * @return ECN mode
+     */
+    EcnMode_t GetEcnMode() const;
+
+    /**
+     * @brief Set ACE field into TCP flags
+     * @param ace The 3-bit ACE value (0..7)
+     * @return The 16-bit flags value shifted to bits 6..8
+     */
+    inline uint16_t SetAceFlags(uint8_t ace) const
+    {
+        uint16_t aceFlags = static_cast<uint16_t>(ace & 0x7);
+        return static_cast<uint16_t>(aceFlags << 6);
+    }
+
+    /**
+     * @brief Extract the 3-bit ACE field from TCP flags
+     * @param flags The 16-bit flags
+     * @return The 3-bit ACE integer value (0..7)
+     */
+    inline uint8_t GetAceFlags(uint16_t flags) const
+    {
+        return static_cast<uint8_t>((flags >> 6) & 0x7);
+    }
+
+    /**
+     * @brief Encode receiver CE packet counter into 3-bit ACE field
+     * @param cepR The receiver CE packet count
+     * @return The 3-bit modulo-8 ACE value
+     */
+    uint8_t EncodeAceFlags(uint32_t cepR) const;
+
+    /**
+     * @brief Decode sender AccECN data from incoming ACK header
+     * @param tcpHeader The received TCP header
+     */
+    void DecodeAccEcnData(const TcpHeader& tcpHeader);
+
+    /**
      * @brief Set ECN mode of use on the socket
      *
      * @param useEcn Mode of ECN to use.
@@ -902,7 +969,7 @@ class TcpSocketBase : public TcpSocket
      *
      * @param flags the packet's flags
      */
-    virtual void SendEmptyPacket(uint8_t flags);
+    virtual void SendEmptyPacket(uint16_t flags);
 
     /**
      * @brief Send reset and tear down this socket
@@ -1333,6 +1400,47 @@ class TcpSocketBase : public TcpSocket
     void AddOptionTimestamp(TcpHeader& header);
 
     /**
+     * @brief Inspect IP ECN field in IPv4 packets
+     * @param header The IPv4 header
+     * @param tcpHeader The TCP header
+     * @param tcpPayloadSize Size of TCP payload
+     */
+    void CheckEcnInIpv4(const Ipv4Header& header, const TcpHeader& tcpHeader, uint32_t tcpPayloadSize);
+
+    /**
+     * @brief Inspect IP ECN field in IPv6 packets
+     * @param header The IPv6 header
+     * @param tcpHeader The TCP header
+     * @param tcpPayloadSize Size of TCP payload
+     */
+    void CheckEcnInIpv6(const Ipv6Header& header, const TcpHeader& tcpHeader, uint32_t tcpPayloadSize);
+
+    /**
+     * @brief Check ECN flags on received SYN packet
+     * @param tcpHeader The received TCP header
+     */
+    void CheckEcnRvdSyn(const TcpHeader& tcpHeader);
+
+    /**
+     * @brief Check ECN flags on received SYN/ACK packet
+     * @param tcpHeader The received TCP header
+     */
+    void CheckEcnRvdSynAck(const TcpHeader& tcpHeader);
+
+    /**
+     * @brief Check ECN flags on received 3WHS final ACK packet
+     * @param tcpHeader The received TCP header
+     */
+    void CheckEcnRvdLastAck(const TcpHeader& tcpHeader);
+
+    /**
+     * @brief Check whether ECE is received
+     * @param tcpHeader The received TCP header
+     * @return true if ECE received
+     */
+    bool IsEcnRvdEce(const TcpHeader& tcpHeader);
+
+    /**
      * @brief Performs a safe subtraction between a and b (a-b)
      *
      * Safe is used to indicate that, if b>a, the results returned is 0.
@@ -1505,6 +1613,8 @@ class TcpSocketBase : public TcpSocket
     Timer m_pacingTimer{Timer::CANCEL_ON_DESTROY}; //!< Pacing Event
 
     // Parameters related to Explicit Congestion Notification
+    EcnMode_t m_ecnMode{EcnMode_t::ClassicEcn}; //!< Socket ECN capability
+    Ptr<TcpAccEcnData> m_accEcnData{nullptr};    //!< AccECN state data
     TracedValue<SequenceNumber32> m_ecnEchoSeq{
         0}; //!< Sequence number of the last received ECN Echo
     TracedValue<SequenceNumber32> m_ecnCESeq{
