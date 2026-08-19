@@ -1,23 +1,11 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
  * Copyright (c) 2018 Tsinghua University
  * Copyright (c) 2018 NITK Surathkal
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation;
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * Authors: Wenying Dai <dwy927@gmail.com>
- *          Mohit P. Tahiliani <tahiliani.nitk@gmail.com>
+ * Author: Wenying Dai <dwy927@gmail.com>
+ *         Mohit P. Tahiliani <tahiliani.nitk@gmail.com>
  */
 
 #ifndef TCP_ACCECN_DATA_H
@@ -26,43 +14,64 @@
 #include "ns3/object.h"
 #include "ns3/traced-value.h"
 
-namespace ns3 {
+namespace ns3
+{
 
+/**
+ * @ingroup tcp
+ *
+ * @brief Holds sender and receiver Accurate ECN (AccECN) state counters and traces.
+ *
+ * Implements counter structures and tracking specified in draft-ietf-tcpm-accurate-ecn.
+ */
 class TcpAccEcnData : public Object
 {
-public:
+  public:
+    /**
+     * @brief Get the type ID.
+     * @return the object TypeId
+     */
+    static TypeId GetTypeId();
 
-  /**
-   * Get the type ID.
-   * \brief Get the type ID.
-   * \return the object TypeId
-   */
-  static TypeId GetTypeId (void);
+    /**
+     * @brief Constructor.
+     */
+    TcpAccEcnData();
 
-  // Default copy-constructor, destructor
-  TcpAccEcnData () : Object (),
-      m_ecnCepS (0), m_ecnCebS (0), m_ecnE0bS (0), m_ecnE1bS (0),
-      m_ecnCepR (0), m_ecnCebR (0), m_ecnE0bR (0), m_ecnE1bR (0),
-      m_useDelAckAccEcn (true), m_isIniS (false), m_isIniR (false)
-  {};
+    /**
+     * @brief Destructor.
+     */
+    ~TcpAccEcnData() override = default;
 
-  void IniSenderCounters () { if(!m_isIniS) { m_isIniS = true; m_ecnCepS = 5; m_ecnE0bS = 1; m_ecnCebS = 0; m_ecnE1bS = 0;} }
-  void IniReceiverCounters () { if(!m_isIniR) { m_isIniR = true; m_ecnCepR = 5; m_ecnE0bR = 1; m_ecnCebR = 0; m_ecnE1bR = 0;} }
+    /**
+     * @brief Initialize sender counters upon connection establishment.
+     */
+    void IniSenderCounters();
 
-  TracedValue<uint32_t>   m_ecnCepS    {0}; //!< For data sender, the number of packets marked respectively with the CE
-  TracedValue<uint32_t>   m_ecnCebS    {0}; //!< For data sender, the number of TCP payload bytes in packets marked respectively with the CE
-  TracedValue<uint32_t>   m_ecnE0bS    {0}; //!< For data sender, the number of TCP payload bytes in packets marked respectively with the ECT(0)
-  TracedValue<uint32_t>   m_ecnE1bS    {0}; //!< For data sender, the number of TCP payload bytes in packets marked respectively with the ECT(1)
-  TracedValue<uint32_t>   m_ecnCepR    {0}; //!< For data receiver, the number of packets marked respectively with the CE
-  TracedValue<uint32_t>   m_ecnCebR    {0}; //!< For data receiver, the number of TCP payload bytes in packets marked respectively with the CE
-  TracedValue<uint32_t>   m_ecnE0bR    {0}; //!< For data receiver, the number of TCP payload bytes in packets marked respectively with the ECT(0)
-  TracedValue<uint32_t>   m_ecnE1bR    {0}; //!< For data receiver, the number of TCP payload bytes in packets marked respectively with the ECT(1)
-  bool m_useDelAckAccEcn  {true};
+    /**
+     * @brief Initialize receiver counters upon connection establishment.
+     */
+    void IniReceiverCounters();
 
-private:
-  bool       m_isIniS     {false};
-  bool       m_isIniR     {false};
+    // Sender mirrored counters (s.*)
+    TracedValue<uint32_t> m_ecnCepS{0}; ///< Sender CE packet counter
+    TracedValue<uint32_t> m_ecnCebS{0}; ///< Sender CE payload byte counter
+    TracedValue<uint32_t> m_ecnE0bS{0}; ///< Sender ECT(0) payload byte counter
+    TracedValue<uint32_t> m_ecnE1bS{0}; ///< Sender ECT(1) payload byte counter
+
+    // Receiver local counters (r.*)
+    TracedValue<uint32_t> m_ecnCepR{0}; ///< Receiver CE packet counter
+    TracedValue<uint32_t> m_ecnCebR{0}; ///< Receiver CE payload byte counter
+    TracedValue<uint32_t> m_ecnE0bR{0}; ///< Receiver ECT(0) payload byte counter
+    TracedValue<uint32_t> m_ecnE1bR{0}; ///< Receiver ECT(1) payload byte counter
+
+    bool m_useDelAckAccEcn{true}; ///< Flag for change-triggered delayed ACKs
+
+  private:
+    bool m_isIniS{false}; ///< Whether sender counters have been initialized
+    bool m_isIniR{false}; ///< Whether receiver counters have been initialized
 };
+
 } // namespace ns3
 
-#endif //TCP_ACCECN_DATA_H
+#endif /* TCP_ACCECN_DATA_H */

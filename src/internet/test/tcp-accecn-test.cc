@@ -1,821 +1,528 @@
-
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
 /*
- * Copyright (c) 2018 Tsinghua University
- * Copyright (c) 2018 NITK Surathkal
+ * Copyright (c) 2026
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation;
+ * SPDX-License-Identifier: GPL-2.0-only
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
- *
- * Authors: Wenying Dai <dwy927@gmail.com>
- *          Mohit P. Tahiliani <tahiliani.nitk@gmail.com>
+ * Accurate ECN (AccECN) Test Suite.
  */
 
-#include "ns3/ipv4.h"
-#include "ns3/ipv6.h"
-#include "ns3/ipv4-interface-address.h"
-#include "ns3/ipv4-route.h"
-#include "ns3/ipv6-route.h"
-#include "ns3/ipv4-routing-protocol.h"
-#include "ns3/ipv6-routing-protocol.h"
-#include "../model/ipv4-end-point.h"
-#include "../model/ipv6-end-point.h"
 #include "tcp-general-test.h"
-#include "ns3/node.h"
+
+#include "ns3/ipv4-end-point.h"
+#include "ns3/ipv4-header.h"
+#include "ns3/ipv6-end-point.h"
 #include "ns3/log.h"
-#include "tcp-error-model.h"
-#include "ns3/tcp-l4-protocol.h"
-#include "ns3/tcp-tx-buffer.h"
-#include "ns3/tcp-rx-buffer.h"
+#include "ns3/node.h"
 #include "ns3/rtt-estimator.h"
+#include "ns3/simple-channel.h"
+#include "ns3/tcp-accecn-data.h"
+#include "ns3/tcp-header.h"
+#include "ns3/tcp-l4-protocol.h"
+#include "ns3/tcp-rx-buffer.h"
+#include "ns3/tcp-socket-base.h"
+#include "ns3/tcp-socket-state.h"
 
-namespace ns3 {
-
-NS_LOG_COMPONENT_DEFINE ("TcpAccEcnTestSuite");
-
-class TcpSocketTestAccEcn : public TcpSocketMsgBase
+namespace ns3
 {
-public:
-    static TypeId GetTypeId (void);
 
-    TcpSocketTestAccEcn () : TcpSocketMsgBase ()
-    {
-      m_dataPacketSent = 0;
-    }
-
-    TcpSocketTestAccEcn (const TcpSocketTestAccEcn &other)
-            : TcpSocketMsgBase (other),
-              m_testcase (other.m_testcase),
-              m_who (other.m_who)
-    {
-    }
-
-    enum SocketWho
-    {
-        SENDER,  //!< Sender node
-        RECEIVER //!< Receiver node
-    };
-
-    void SetTestCase (uint32_t testCase, SocketWho who);
-
-protected:
-    virtual void SendEmptyPacket (uint16_t flags);
-    virtual uint32_t SendDataPacket (SequenceNumber32 seq, uint32_t maxSize, bool withAck);
-    virtual Ptr<TcpSocketBase> Fork (void);
-    void SetCE (Ptr<Packet> p);
-    void SetECT1 (Ptr<Packet> p);
-    void SetNotECT (Ptr<Packet> p);
-
-private:
-    uint32_t m_dataPacketSent;
-    uint32_t m_testcase;
-    SocketWho m_who;
-};
-
-NS_OBJECT_ENSURE_REGISTERED (TcpSocketTestAccEcn);
-
-TypeId
-TcpSocketTestAccEcn::GetTypeId (void)
-{
-  static TypeId tid = TypeId ("ns3::TcpSocketTestAccEcn")
-          .SetParent<TcpSocketMsgBase> ()
-          .SetGroupName ("Internet")
-          .AddConstructor<TcpSocketTestAccEcn> ()
-  ;
-  return tid;
-}
-
-void
-TcpSocketTestAccEcn::SetTestCase (uint32_t testCase, SocketWho who)
-{
-  m_testcase = testCase;
-  m_who = who;
-}
-
-void
-TcpSocketTestAccEcn::SetCE(Ptr<Packet> p)
-{
-  uint8_t ipTos = MarkEcnCe(GetIpTos());
-
-  SocketIpTosTag ipTosTag;
-  ipTosTag.SetTos (ipTos);
-  p->ReplacePacketTag (ipTosTag);
-
-  SocketIpv6TclassTag ipTclassTag;
-  ipTclassTag.SetTclass (ipTos);
-  p->ReplacePacketTag (ipTclassTag);
-}
-
-void
-TcpSocketTestAccEcn::SetECT1(Ptr<Packet> p)
-{
-  uint8_t ipTos = MarkEcnEct1(GetIpTos());
-
-  SocketIpTosTag ipTosTag;
-  ipTosTag.SetTos (ipTos);
-  p->ReplacePacketTag (ipTosTag);
-
-  SocketIpv6TclassTag ipTclassTag;
-  ipTclassTag.SetTclass (ipTos);
-  p->ReplacePacketTag (ipTclassTag);
-}
-
-void
-TcpSocketTestAccEcn::SetNotECT(Ptr<Packet> p)
-{
-  uint8_t ipTos = ClearEcnBits(GetIpTos());
-
-  SocketIpTosTag ipTosTag;
-  ipTosTag.SetTos (ipTos);
-  p->ReplacePacketTag (ipTosTag);
-
-  SocketIpv6TclassTag ipTclassTag;
-  ipTclassTag.SetTclass (ipTos);
-  p->ReplacePacketTag (ipTclassTag);
-}
-
-Ptr<TcpSocketBase>
-TcpSocketTestAccEcn::Fork (void)
-{
-  return CopyObject<TcpSocketTestAccEcn> (this);
-}
-
-void
-TcpSocketTestAccEcn::SendEmptyPacket (uint16_t flags)
-{
-  NS_LOG_FUNCTION (this << static_cast<uint32_t> (flags));
-
-  if (m_endPoint == nullptr && m_endPoint6 == nullptr)
-  {
-    NS_LOG_WARN ("Failed to send empty packet due to null endpoint");
-    return;
-  }
-
-  Ptr<Packet> p = Create<Packet> ();
-  TcpHeader header;
-  SequenceNumber32 s = m_tcb->m_nextTxSequence;
-
-  if (flags & TcpHeader::FIN)
-  {
-    flags |= TcpHeader::ACK;
-  }
-  else if (m_state == FIN_WAIT_1 || m_state == LAST_ACK || m_state == CLOSING)
-  {
-    ++s;
-  }
-
-  // Based on ECN++ draft Table 1 https://tools.ietf.org/html/draft-ietf-tcpm-generalized-ecn-02#section-3.2
-  // if use ECN++ to reinforce classic ECN RFC 3618
-  // should set ECT in SYN/ACK, pure ACK, FIN, RST
-  // pure ACK do not clear so far, temporarily not set ECT in pure ACK for ECN++
-  bool withEct = false;
-  if ((m_ecnMode == EcnMode_t::EcnPp) && (((flags & TcpHeader::SYN) && (flags & TcpHeader::ACK)) ||
-                                          flags & TcpHeader::FIN || flags & TcpHeader::RST))
-  {
-    withEct = true;
-  }
-  // AccEcn can set ECT in all control packet including SYN, SYN/ACK, pure ACK, FIN, RST
-  if (m_ecnMode == EcnMode_t::AccEcn && (flags & TcpHeader::SYN || flags == TcpHeader::ACK || flags & TcpHeader::FIN || flags & TcpHeader::RST))
-  {
-    withEct = true;
-  }
-  AddSocketTags (p, withEct);
-
-  if (m_ecnMode == EcnMode_t::AccEcn && m_connected)
-  {
-    NS_ASSERT_MSG (GetAceFlags(flags) == 0, "there are some unexpected bits in ACE field");
-    uint16_t aceFlags = SetAceFlags (EncodeAceFlags (m_accEcnData->m_ecnCepR));
-    header.SetFlags (flags | aceFlags);
-  }
-  else
-  {
-    header.SetFlags (flags);
-  }
-
-  header.SetSequenceNumber (s);
-  header.SetAckNumber (m_rxBuffer->NextRxSequence ());
-  if (m_endPoint != nullptr)
-  {
-    header.SetSourcePort (m_endPoint->GetLocalPort ());
-    header.SetDestinationPort (m_endPoint->GetPeerPort ());
-  }
-  else
-  {
-    header.SetSourcePort (m_endPoint6->GetLocalPort ());
-    header.SetDestinationPort (m_endPoint6->GetPeerPort ());
-  }
-  AddOptions (header);
-
-  // RFC 6298, clause 2.4
-  m_rto = Max (m_rtt->GetEstimate () + Max (m_clockGranularity, m_rtt->GetVariation () * 4), m_minRto);
-
-  uint16_t windowSize = AdvertisedWindowSize ();
-  bool hasSyn = flags & TcpHeader::SYN;
-  bool hasAck = flags & TcpHeader::ACK;
-  bool hasFin = flags & TcpHeader::FIN;
-  bool isAck = flags == TcpHeader::ACK;
-
-  if (hasSyn)
-  {
-    if (m_winScalingEnabled)
-    { // The window scaling option is set only on SYN packets
-      AddOptionWScale (header);
-    }
-
-    if (m_sackEnabled)
-    {
-      AddOptionSackPermitted (header);
-    }
-
-    if (m_synCount == 0)
-    { // No more connection retries, give up
-      NS_LOG_LOGIC ("Connection failed.");
-      m_rtt->Reset (); //According to recommendation -> RFC 6298
-      CloseAndNotify ();
-      return;
-    }
-    else
-    { // Exponential backoff of connection time out
-      int backoffCount = 0x1 << (m_synRetries - m_synCount);
-      m_rto = m_cnTimeout * backoffCount;
-      m_synCount--;
-    }
-
-    if (m_synRetries - 1 == m_synCount)
-    {
-      UpdateRttHistory (s, 0, false);
-    }
-    else
-    { // This is SYN retransmission
-      UpdateRttHistory (s, 0, true);
-    }
-
-    windowSize = AdvertisedWindowSize (false);
-  }
-  header.SetWindowSize (windowSize);
-
-  if (flags & TcpHeader::ACK)
-  { // If sending an ACK, cancel the delay ACK as well
-    m_delAckEvent.Cancel ();
-    m_delAckCount = 0;
-    if (m_highTxAck < header.GetAckNumber ())
-    {
-      m_highTxAck = header.GetAckNumber ();
-    }
-    if (m_sackEnabled && m_rxBuffer->GetSackListSize () > 0)
-    {
-      AddOptionSack (header);
-    }
-    NS_LOG_INFO ("Sending a pure ACK, acking seq " << m_rxBuffer->NextRxSequence ());
-  }
-
-  m_txTrace (p, header, this);
-
-  if (hasSyn && !hasAck && m_who == SENDER) // SYN
-  {
-    if (m_testcase == 8 || m_testcase == 11)
-    {
-      SetCE(p);
-    }
-    else if (m_testcase == 9)
-    {
-      SetECT1(p);
-    }
-    else if (m_testcase == 10)
-    {
-      SetNotECT(p);
-    }
-  }
-
-  if (hasSyn && hasAck && m_who == RECEIVER) // SYN + ACK
-  {
-    if (m_testcase == 8 || m_testcase == 11)
-    {
-      SetCE(p);
-    }
-    else if (m_testcase == 9)
-    {
-      SetECT1(p);
-    }
-    else if (m_testcase == 10)
-    {
-      SetNotECT(p);
-    }
-  }
-
-  if (!hasSyn && hasAck && !m_connected && m_who == SENDER) // LastAck
-  {
-    if (m_testcase == 11)
-    {
-      SetCE(p);
-    }
-  }
-
-  if (m_endPoint != nullptr)
-  {
-    m_tcp->SendPacket (p, header, m_endPoint->GetLocalAddress (),
-                       m_endPoint->GetPeerAddress (), m_boundnetdevice);
-  }
-  else
-  {
-    m_tcp->SendPacket (p, header, m_endPoint6->GetLocalAddress (),
-                       m_endPoint6->GetPeerAddress (), m_boundnetdevice);
-  }
-
-
-  if (m_retxEvent.IsExpired () && (hasSyn || hasFin) && !isAck )
-  { // Retransmit SYN / SYN+ACK / FIN / FIN+ACK to guard against lost
-    NS_LOG_LOGIC ("Schedule retransmission timeout at time "
-                          << Simulator::Now ().GetSeconds () << " to expire at time "
-                          << (Simulator::Now () + m_rto.Get ()).GetSeconds ());
-    m_retxEvent = Simulator::Schedule (m_rto, &TcpSocketTestAccEcn::SendEmptyPacket, this, flags);
-  }
-}
-
-uint32_t
-TcpSocketTestAccEcn::SendDataPacket (SequenceNumber32 seq, uint32_t maxSize, bool withAck)
-{
-  NS_LOG_FUNCTION (this << seq << maxSize << withAck);
-
-  bool isRetransmission = false;
-  if (seq != m_tcb->m_highTxMark)
-  {
-    isRetransmission = true;
-  }
-
-  Ptr<Packet> p = m_txBuffer->CopyFromSequence (maxSize, seq);
-  uint32_t sz = p->GetSize (); // Size of packet
-  uint16_t flags = withAck ? TcpHeader::ACK : 0;
-  uint32_t remainingData = m_txBuffer->SizeFromSequence (seq + SequenceNumber32 (sz));
-
-  if (m_tcb->m_pacing)
-  {
-    NS_LOG_INFO ("Pacing is enabled");
-    if (m_pacingTimer.IsExpired ())
-    {
-      NS_LOG_DEBUG ("Current Pacing Rate " << m_tcb->m_currentPacingRate);
-      NS_LOG_DEBUG ("Timer is in expired state, activate it " << m_tcb->m_currentPacingRate.CalculateBytesTxTime (sz));
-      m_pacingTimer.Schedule (m_tcb->m_currentPacingRate.CalculateBytesTxTime (sz));
-    }
-    else
-    {
-      NS_LOG_INFO ("Timer is already in running state");
-    }
-  }
-
-  if (withAck)
-  {
-    m_delAckEvent.Cancel ();
-    m_delAckCount = 0;
-  }
-
-  // Classic ECN: Sender should reduce the Congestion Window as a response to receiver's ECN Echo notification only once per window
-  // ECN++: Sender should reduce the Congestion Window even for the retransmission packet
-  bool isRequiredCWR = (m_ecnMode == EcnMode_t::ClassicEcn && !isRetransmission) || m_ecnMode == EcnMode_t::EcnPp;
-  if (m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD && m_ecnEchoSeq.Get() > m_ecnCWRSeq.Get () && isRequiredCWR)
-  {
-    NS_LOG_INFO ("Backoff mechanism by reducing CWND  by half because we've received ECN Echo");
-    m_tcb->m_cWnd = std::max (m_tcb->m_cWnd.Get () / 2, m_tcb->m_segmentSize);
-    m_tcb->m_ssThresh = m_tcb->m_cWnd;
-    m_tcb->m_cWndInfl = m_tcb->m_cWnd;
-    flags |= TcpHeader::CWR;
-    m_ecnCWRSeq = seq;
-    NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_CWR_SENT");
-    m_tcb->m_ecnState = TcpSocketState::ECN_CWR_SENT;
-    NS_LOG_INFO ("CWR flags set");
-    NS_LOG_DEBUG (TcpSocketState::TcpCongStateName[m_tcb->m_congState] << " -> CA_CWR");
-    if (m_tcb->m_congState == TcpSocketState::CA_OPEN)
-    {
-      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_CWR);
-      m_tcb->m_congState = TcpSocketState::CA_CWR;
-    }
-  }
-
-  // Based on ECN++ draft Table 1 https://tools.ietf.org/html/draft-ietf-tcpm-generalized-ecn-02#section-3.2
-  // if use ECN++ to reinforce classic ECN RFC 3618
-  // should set ECT in Re-XMT
-  bool withEct = isRetransmission;
-  AddSocketTags (p, withEct);
-
-  if (m_closeOnEmpty && (remainingData == 0))
-  {
-    flags |= TcpHeader::FIN;
-    if (m_state == ESTABLISHED)
-    { // On active close: I am the first one to send FIN
-      NS_LOG_DEBUG ("ESTABLISHED -> FIN_WAIT_1");
-      m_state = FIN_WAIT_1;
-    }
-    else if (m_state == CLOSE_WAIT)
-    { // On passive close: Peer sent me FIN already
-      NS_LOG_DEBUG ("CLOSE_WAIT -> LAST_ACK");
-      m_state = LAST_ACK;
-    }
-  }
-  TcpHeader header;
-
-  if (m_ecnMode == EcnMode_t::AccEcn && m_connected)
-  {
-    NS_ASSERT_MSG (GetAceFlags(flags) == 0, "there are some unexpected bits in ACE field");
-    uint16_t aceFlags = SetAceFlags (EncodeAceFlags (m_accEcnData->m_ecnCepR));
-    header.SetFlags (flags | aceFlags);
-  }
-  else
-  {
-    header.SetFlags (flags);
-  }
-
-  header.SetSequenceNumber (seq);
-  header.SetAckNumber (m_rxBuffer->NextRxSequence ());
-  if (m_endPoint)
-  {
-    header.SetSourcePort (m_endPoint->GetLocalPort ());
-    header.SetDestinationPort (m_endPoint->GetPeerPort ());
-  }
-  else
-  {
-    header.SetSourcePort (m_endPoint6->GetLocalPort ());
-    header.SetDestinationPort (m_endPoint6->GetPeerPort ());
-  }
-  header.SetWindowSize (AdvertisedWindowSize ());
-  AddOptions (header);
-
-  if (m_retxEvent.IsExpired ())
-  {
-    // Schedules retransmit timeout. m_rto should be already doubled.
-
-    NS_LOG_LOGIC (this << " SendDataPacket Schedule ReTxTimeout at time " <<
-                       Simulator::Now ().GetSeconds () << " to expire at time " <<
-                       (Simulator::Now () + m_rto.Get ()).GetSeconds () );
-    m_retxEvent = Simulator::Schedule (m_rto, &TcpSocketTestAccEcn::ReTxTimeout, this);
-  }
-
-  m_txTrace (p, header, this);
-
-  m_dataPacketSent++;
-  if (m_who == SENDER && m_dataPacketSent == 1) // first data segment
-  {
-    if (m_testcase == 11)
-    {
-      SetCE(p);
-    }
-  }
-
-  if (m_endPoint)
-  {
-    m_tcp->SendPacket (p, header, m_endPoint->GetLocalAddress (),
-                       m_endPoint->GetPeerAddress (), m_boundnetdevice);
-    NS_LOG_DEBUG ("Send segment of size " << sz << " with remaining data " <<
-                                          remainingData << " via TcpL4Protocol to " <<  m_endPoint->GetPeerAddress () <<
-                                          ". Header " << header);
-  }
-  else
-  {
-    m_tcp->SendPacket (p, header, m_endPoint6->GetLocalAddress (),
-                       m_endPoint6->GetPeerAddress (), m_boundnetdevice);
-    NS_LOG_DEBUG ("Send segment of size " << sz << " with remaining data " <<
-                                          remainingData << " via TcpL4Protocol to " <<  m_endPoint6->GetPeerAddress () <<
-                                          ". Header " << header);
-  }
-
-  UpdateRttHistory (seq, sz, isRetransmission);
-
-  // Update bytes sent during recovery phase
-  if(m_tcb->m_congState == TcpSocketState::CA_RECOVERY)
-  {
-    m_recoveryOps->UpdateBytesSent (sz);
-  }
-
-  // Notify the application of the data being sent unless this is a retransmit
-  if (seq + sz > m_tcb->m_highTxMark)
-  {
-    Simulator::ScheduleNow (&TcpSocketTestAccEcn::NotifyDataSent, this,
-                            (seq + sz - m_tcb->m_highTxMark.Get ()));
-  }
-  // Update highTxMark
-  m_tcb->m_highTxMark = std::max (seq + sz, m_tcb->m_highTxMark.Get ());
-  return sz;
-}
-
-class TcpAccEcnTest : public TcpGeneralTest
-{
-public:
-    /**
-     * \brief Constructor
-     *
-     * \param testcase test case number
-     * \param desc Description about the ECN capabilities of sender and reciever
-     */
-    TcpAccEcnTest (uint32_t testcase, const std::string &desc);
-
-protected:
-    virtual void Rx (const Ptr<const Packet> p, const TcpHeader&h, SocketWho who);
-    virtual void Tx (const Ptr<const Packet> p, const TcpHeader&h, SocketWho who);
-    virtual Ptr<TcpSocketMsgBase> CreateSenderSocket (Ptr<Node> node);
-    virtual Ptr<TcpSocketMsgBase> CreateReceiverSocket (Ptr<Node> node);
-    void ConfigureProperties ();
-    void AccEcnE0BTrace (uint32_t oldValue, uint32_t newValue);
-    void AccEcnE1BTrace (uint32_t oldValue, uint32_t newValue);
-    void AccEcnCEBTrace (uint32_t oldValue, uint32_t newValue);
-    void AccEcnCEPTrace (uint32_t oldValue, uint32_t newValue);
-
-private:
-    uint32_t m_testcase;
-    uint32_t m_senderSent;
-    uint32_t m_senderReceived;
-    uint32_t m_receiverSent;
-    uint32_t m_receiverReceived;
-    uint32_t m_e0bChangeCount;
-    uint32_t m_e1bChangeCount;
-    uint32_t m_cebChangeCount;
-    uint32_t m_cepChangeCount;
-};
-
-TcpAccEcnTest::TcpAccEcnTest (uint32_t testcase, const std::string &desc)
-        : TcpGeneralTest (desc),
-          m_testcase (testcase),
-          m_senderSent (0),
-          m_senderReceived (0),
-          m_receiverSent (0),
-          m_receiverReceived (0),
-          m_e0bChangeCount (0),
-          m_e1bChangeCount (0),
-          m_cebChangeCount (0),
-          m_cepChangeCount (0)
-{
-}
-
-void TcpAccEcnTest::ConfigureProperties ()
-{
-  TcpGeneralTest::ConfigureProperties ();
-  if (m_testcase == 1 || m_testcase == 2 || m_testcase == 3 || m_testcase >=7)
-  {
-    SetEcn (SENDER, TcpSocketBase::AccEcn);
-  }
-  else if ( m_testcase == 6)
-  {
-    SetEcn (SENDER, TcpSocketBase::EcnPp);
-  }
-  else if (m_testcase == 5)
-  {
-    SetEcn (SENDER, TcpSocketBase::ClassicEcn);
-  }
-
-  if (m_testcase >= 4)
-  {
-    SetEcn (RECEIVER, TcpSocketBase::AccEcn);
-  }
-  else if (m_testcase == 3)
-  {
-    SetEcn (RECEIVER, TcpSocketBase::EcnPp);
-  }
-  else if (m_testcase == 2)
-  {
-    SetEcn (RECEIVER, TcpSocketBase::ClassicEcn);
-  }
-}
-
-Ptr<TcpSocketMsgBase> TcpAccEcnTest::CreateSenderSocket (Ptr<Node> node)
-{
-  Ptr<TcpSocketTestAccEcn> socket = DynamicCast<TcpSocketTestAccEcn> (
-          CreateSocket (node, TcpSocketTestAccEcn::GetTypeId (), m_congControlTypeId));
-  socket->SetTestCase (m_testcase, TcpSocketTestAccEcn::SENDER);
-  socket->TraceConnectWithoutContext ("AccEcnE0bS",
-                                              MakeCallback (&TcpAccEcnTest::AccEcnE0BTrace, this));
-  socket->TraceConnectWithoutContext ("AccEcnE1bS",
-                                              MakeCallback (&TcpAccEcnTest::AccEcnE1BTrace, this));
-  socket->TraceConnectWithoutContext ("AccEcnCebS",
-                                              MakeCallback (&TcpAccEcnTest::AccEcnCEBTrace, this));
-  socket->TraceConnectWithoutContext ("AccEcnCepS",
-                                              MakeCallback (&TcpAccEcnTest::AccEcnCEPTrace, this));
-
-  return socket;
-}
-
-Ptr<TcpSocketMsgBase> TcpAccEcnTest::CreateReceiverSocket (Ptr<Node> node)
-{
-  Ptr<TcpSocketTestAccEcn> socket = DynamicCast<TcpSocketTestAccEcn> (
-          CreateSocket (node, TcpSocketTestAccEcn::GetTypeId (), m_congControlTypeId));
-  socket->SetTestCase (m_testcase, TcpSocketTestAccEcn::RECEIVER);
-  return socket;
-}
-
-void
-TcpAccEcnTest::AccEcnE0BTrace (uint32_t oldValue, uint32_t newValue)
-{
-  NS_LOG_DEBUG("AccEcnE0BTrace: " << oldValue << " " << newValue);
-}
-
-void
-TcpAccEcnTest::AccEcnE1BTrace (uint32_t oldValue, uint32_t newValue)
-{
-  NS_LOG_DEBUG("AccEcnE1BTrace: " << oldValue << " " << newValue);
-}
-
-void
-TcpAccEcnTest::AccEcnCEBTrace (uint32_t oldValue, uint32_t newValue)
-{
-  NS_LOG_DEBUG("AccEcnCEBTrace: " << oldValue << " " << newValue);
-}
-
-void
-TcpAccEcnTest::AccEcnCEPTrace (uint32_t oldValue, uint32_t newValue)
-{
-  NS_LOG_DEBUG("AccEcnCEPTrace: " << oldValue << " " << newValue);
-  m_cepChangeCount++;
-  if (m_testcase == 11)
-  {
-    if (m_cepChangeCount == 1)
-    {
-      NS_TEST_ASSERT_MSG_EQ (newValue, 5, "AccEcn ACE decode test: initial s.cep should be 5");
-    }
-    if (m_cepChangeCount == 2)
-    {
-      NS_TEST_ASSERT_MSG_EQ (newValue, 6, "AccEcn ACE decode test: s.cep should be 6");
-
-    }
-    if (m_cepChangeCount == 3)
-    {
-      NS_TEST_ASSERT_MSG_EQ (newValue, 8, "AccEcn ACE decode test: s.cep should be 8");
-
-    }
-  }
-
-}
-
-
-
-
-void
-TcpAccEcnTest::Rx (const Ptr<const Packet> p, const TcpHeader &h, SocketWho who)
-{
-  NS_LOG_FUNCTION(this << m_testcase << who);
-
-  if (who == RECEIVER)
-  {
-    m_receiverReceived++;
-    NS_LOG_DEBUG("RECEIVER received: " << m_receiverReceived << " Flags: " << h.GetFlags());
-    if (m_receiverReceived == 1) // SYN
-    {
-      NS_TEST_ASSERT_MSG_NE (((h.GetFlags ()) & TcpHeader::SYN), 0, "SYN should be received as first message at the receiver");
-      if (m_testcase == 1 || m_testcase == 2 || m_testcase == 3 ||m_testcase >= 7)
-      {
-        NS_TEST_ASSERT_MSG_NE ((h.GetFlags () & TcpHeader::ECE) && (h.GetFlags () & TcpHeader::CWR) && (h.GetFlags () & TcpHeader::AE),
-                               0, "The flags ECE + CWR + AE should be set in the TCP header of SYN at receiver when sender is AccEcn Capable");
-      }
-      else if (m_testcase == 5 || m_testcase == 6)
-      {
-        NS_TEST_ASSERT_MSG_NE ((h.GetFlags () & TcpHeader::ECE) && (h.GetFlags () & TcpHeader::CWR) && !(h.GetFlags () & TcpHeader::AE),
-                               0, "The flags ECE + CWR should be set in the TCP header of SYN at receiver when sender is ClassicEcn or EcnPp Capable");
-      }
-      else if (m_testcase == 4)
-      {
-        NS_TEST_ASSERT_MSG_EQ (((h.GetFlags () & TcpHeader::ECE) || (h.GetFlags () & TcpHeader::CWR) || (h.GetFlags () & TcpHeader::AE)),
-                               0, "The flags ECE + CWR + AE should not be set in the TCP header of SYN at receiver when sender is not ECN Capable");
-      }
-    } // End SYN test in tcp header
-
-    if (m_receiverReceived == 2) // Last ACK in three-way handshake
-    {
-      NS_TEST_ASSERT_MSG_NE (((h.GetFlags ()) & TcpHeader::ACK), 0, "ACK should be received as second message at receiver");
-      if (m_testcase >= 7)
-      {
-        // negotiation test
-        uint8_t ace = (h.GetFlags() >> 6) & 0x7;
-        if (m_testcase == 7)
-        {
-          NS_TEST_ASSERT_MSG_EQ (ace - 0b100, 0, "AccEcn last ack test fail for test case 7");
-        }
-        else if (m_testcase == 8)
-        {
-          NS_TEST_ASSERT_MSG_EQ (ace - 0b110, 0, "AccEcn last ack test fail for test case 8");
-        }
-        else if (m_testcase == 9)
-        {
-          NS_TEST_ASSERT_MSG_EQ (ace - 0b011, 0, "AccEcn last ack test fail for test case 9");
-        }
-        else if (m_testcase == 10)
-        {
-          NS_TEST_ASSERT_MSG_EQ (ace - 0b010, 0, "AccEcn last ack test fail for test case 10");
-        }
-
-       }
-    } // End Last Ack test in tcp header
-
-  }// End test for who == RECEIVER
-
-  if (who == SENDER)
-  {
-    m_senderReceived++;
-    NS_LOG_DEBUG("SENDER received: " << m_receiverReceived << " Flags: " << h.GetFlags());
-    if (m_senderReceived == 1) // SYN+ACK
-    {
-      NS_TEST_ASSERT_MSG_NE (((h.GetFlags ()) & TcpHeader::SYN) && ((h.GetFlags ()) & TcpHeader::ACK), 0, "SYN+ACK received as first message at sender");
-      // negotiation test
-      if (m_testcase == 1 || m_testcase == 4)
-      {
-        NS_TEST_ASSERT_MSG_EQ (((h.GetFlags () & TcpHeader::ECE) || (h.GetFlags () & TcpHeader::CWR) || (h.GetFlags () & TcpHeader::AE)),
-                               0, "The flags ECE + CWR + AE should not be set in the TCP header of SYN+ACK in test case 1 or 4");
-      }
-      else if (m_testcase == 2 || m_testcase == 3 || m_testcase == 5 || m_testcase == 6)
-      {
-        NS_TEST_ASSERT_MSG_NE ((h.GetFlags () & TcpHeader::ECE) && !(h.GetFlags () & TcpHeader::CWR) && !(h.GetFlags () & TcpHeader::AE),
-                               0, "The flags ECE should be set in the TCP header of SYN+ACK in test case 1 3 5 6");
-      }
-      else if (m_testcase == 7) // AE should be set
-      {
-        NS_TEST_ASSERT_MSG_NE (!(h.GetFlags () & TcpHeader::ECE) && !(h.GetFlags () & TcpHeader::CWR) && (h.GetFlags () & TcpHeader::AE),
-                               0, "AccEcn SYN+ACK test fail for test case 7");
-      }
-      else if (m_testcase == 8) // AE + CWR should be set
-      {
-        NS_TEST_ASSERT_MSG_NE (!(h.GetFlags () & TcpHeader::ECE) && (h.GetFlags () & TcpHeader::CWR) && (h.GetFlags () & TcpHeader::AE),
-                               0, "AccEcn SYN+ACK test fail for test case 8");
-      }
-      else if (m_testcase == 9) // CWR + ECE should be set
-      {
-        NS_TEST_ASSERT_MSG_NE ((h.GetFlags () & TcpHeader::ECE) && (h.GetFlags () & TcpHeader::CWR) && !(h.GetFlags () & TcpHeader::AE),
-                               0, "AccEcn SYN+ACK test fail for test case 9");
-      }
-      else if (m_testcase == 10) // CWR should be set
-      {
-        NS_TEST_ASSERT_MSG_NE (!(h.GetFlags () & TcpHeader::ECE) && (h.GetFlags () & TcpHeader::CWR) && !(h.GetFlags () & TcpHeader::AE),
-                               0, "AccEcn SYN+ACK test fail for test case 10");
-      }
-
-    } // End SYN+ACK test in tcp header
-
-  }// End test for who == SENDER
-}
-
-void TcpAccEcnTest::Tx (const Ptr<const Packet> p, const TcpHeader &h, SocketWho who)
-{
-  NS_LOG_FUNCTION(this << m_testcase << who);
-  if (who == SENDER)
-  {
-    m_senderSent++;
-    NS_LOG_DEBUG("SENDER sent: " << m_senderSent << " Flags: " << h.GetFlags());
-    if (m_testcase == 11)
-    {
-      // ACE Encoding test
-      if (m_senderSent == 3 || m_senderSent == 4 || m_senderSent == 5) // the packet after connection established
-      {
-        uint8_t ace = (h.GetFlags() >> 6) & 0x7;
-        NS_TEST_ASSERT_MSG_EQ (ace - 0b110, 0, "ACE encoding test: should be 0b110");
-      }
-    }
-  }
-
-  if (who == RECEIVER)
-  {
-    m_receiverSent++;
-    NS_LOG_DEBUG("RECEIVER sent: " << m_receiverSent << " Flags: " << h.GetFlags());
-    if (m_testcase == 11)
-    {
-      // ACE Encoding test
-      if (m_receiverSent == 2)
-      {
-        NS_TEST_ASSERT_MSG_NE (((h.GetFlags ()) & TcpHeader::ACK), 0, "ACK for the data segments");
-        uint8_t ace = (h.GetFlags() >> 6) & 0x7;
-        NS_TEST_ASSERT_MSG_EQ (ace , 0, "ACE encoding test: should be 0 because 8 % 8 = 0");
-      }
-
-    }
-  }
-}
+NS_LOG_COMPONENT_DEFINE("TcpAccEcnTestSuite");
 
 /**
  * \ingroup internet-test
- * \ingroup tests
- *
- * \brief TCP ECN++ TestSuite
+ * \brief Socket that allows injecting custom IP TOS / ECN marks on packets.
  */
-static class TcpAccEcnTestSuite : public TestSuite
+class TcpSocketAccEcnCustom : public TcpSocketMsgBase
 {
-public:
-    TcpAccEcnTestSuite () : TestSuite ("tcp-accecn-test", UNIT)
+  public:
+    static TypeId GetTypeId()
     {
-      AddTestCase (new TcpAccEcnTest (1, "AccEcn Negotiation Test : Sender AccEcn, Receiver NoEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (2, "AccEcn Negotiation Test : Sender AccEcn, Receiver ClassicEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (3, "AccEcn Negotiation Test : Sender AccEcn, Receiver EcnPp"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (4, "AccEcn Negotiation Test : Sender NoEcn, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (5, "AccEcn Negotiation Test : Sender ClassicEcn, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (6, "AccEcn Negotiation Test : Sender EcnPp, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (7, "AccEcn Negotiation Test : Sender AccEcn, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (8, "AccEcn Negotiation Test : Sender AccEcn, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (9, "AccEcn Negotiation Test : Sender AccEcn, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (10, "AccEcn Negotiation Test : Sender AccEcn, Receiver AccEcn"), TestCase::QUICK);
-      AddTestCase (new TcpAccEcnTest (11, "AccEcn Feedback Test : Sender AccEcn, Receiver AccEcn"), TestCase::QUICK);
+        static TypeId tid = TypeId("ns3::TcpSocketAccEcnCustom")
+                                .SetParent<TcpSocketMsgBase>()
+                                .SetGroupName("Internet")
+                                .AddConstructor<TcpSocketAccEcnCustom>();
+        return tid;
     }
-} g_tcpAccEcnTestSuite;
 
-}// namespace ns3
+    TcpSocketAccEcnCustom()
+        : TcpSocketMsgBase()
+    {
+    }
+
+    TcpSocketAccEcnCustom(const TcpSocketAccEcnCustom& other)
+        : TcpSocketMsgBase(other),
+          m_markSynCe(other.m_markSynCe),
+          m_markSynAckCe(other.m_markSynAckCe),
+          m_markDataCePkt(other.m_markDataCePkt),
+          m_pktCount(other.m_pktCount)
+    {
+    }
+
+    void SetMarkSynCe(bool v)
+    {
+        m_markSynCe = v;
+    }
+
+    void SetMarkSynAckCe(bool v)
+    {
+        m_markSynAckCe = v;
+    }
+
+    void SetMarkDataCePacket(uint32_t pktIndex)
+    {
+        m_markDataCePkt = pktIndex;
+    }
+
+  protected:
+    void SendEmptyPacket(uint16_t flags) override
+    {
+        Ptr<Packet> p = Create<Packet>();
+        TcpHeader header;
+        SequenceNumber32 s = m_tcb->m_nextTxSequence;
+        TcpPacketType_t packetType = INVALID;
+
+        if (flags & TcpHeader::FIN)
+        {
+            packetType = TcpPacketType_t::FIN;
+            flags |= TcpHeader::ACK;
+        }
+        else if (m_state == FIN_WAIT_1 || m_state == LAST_ACK || m_state == CLOSING)
+        {
+            ++s;
+        }
+
+        if (flags & TcpHeader::SYN)
+        {
+            packetType = TcpPacketType_t::SYN;
+            if (flags & TcpHeader::ACK)
+            {
+                packetType = TcpPacketType_t::SYN_ACK;
+            }
+        }
+        else if (flags & TcpHeader::ACK)
+        {
+            packetType = TcpPacketType_t::PURE_ACK;
+        }
+
+        if (flags & TcpHeader::RST)
+        {
+            packetType = TcpPacketType_t::RST;
+        }
+
+        AddSocketTags(p, IsEct(packetType));
+
+        if (m_markSynCe && (flags & TcpHeader::SYN) && !(flags & TcpHeader::ACK))
+        {
+            SocketIpTosTag ipTosTag;
+            ipTosTag.SetTos(0x3); // CE mark
+            p->ReplacePacketTag(ipTosTag);
+        }
+        else if (m_markSynAckCe && (flags & TcpHeader::SYN) && (flags & TcpHeader::ACK))
+        {
+            SocketIpTosTag ipTosTag;
+            ipTosTag.SetTos(0x3); // CE mark
+            p->ReplacePacketTag(ipTosTag);
+        }
+
+        if (m_ecnMode == EcnMode_t::AccEcn && m_connected)
+        {
+            if (GetAceFlags(flags) == 0)
+            {
+                uint16_t aceFlags = SetAceFlags(EncodeAceFlags(m_accEcnData->m_ecnCepR));
+                header.SetFlags(flags | aceFlags);
+            }
+            else
+            {
+                header.SetFlags(flags);
+            }
+        }
+        else
+        {
+            header.SetFlags(flags);
+        }
+        header.SetSequenceNumber(s);
+        header.SetAckNumber(m_tcb->m_rxBuffer->NextRxSequence());
+        if (m_endPoint != nullptr)
+        {
+            header.SetSourcePort(m_endPoint->GetLocalPort());
+            header.SetDestinationPort(m_endPoint->GetPeerPort());
+        }
+        else
+        {
+            header.SetSourcePort(m_endPoint6->GetLocalPort());
+            header.SetDestinationPort(m_endPoint6->GetPeerPort());
+        }
+        AddOptions(header);
+
+        m_rto = Max(m_rtt->GetEstimate() + Max(m_clockGranularity, m_rtt->GetVariation() * 4),
+                    m_minRto);
+
+        uint16_t windowSize = AdvertisedWindowSize();
+        header.SetWindowSize(windowSize >> m_rcvWindShift);
+
+        if (m_endPoint != nullptr)
+        {
+            m_tcp->SendPacket(p,
+                              header,
+                              m_endPoint->GetLocalAddress(),
+                              m_endPoint->GetPeerAddress(),
+                              m_boundnetdevice);
+        }
+        else
+        {
+            m_tcp->SendPacket(p,
+                              header,
+                              m_endPoint6->GetLocalAddress(),
+                              m_endPoint6->GetPeerAddress(),
+                              m_boundnetdevice);
+        }
+    }
+
+    uint32_t SendDataPacket(SequenceNumber32 seq, uint32_t maxSize, bool withAck) override
+    {
+        m_pktCount++;
+        uint32_t sz = TcpSocketBase::SendDataPacket(seq, maxSize, withAck);
+        return sz;
+    }
+
+    Ptr<TcpSocketBase> Fork() override
+    {
+        return CopyObject<TcpSocketAccEcnCustom>(this);
+    }
+
+  private:
+    bool m_markSynCe{false};
+    bool m_markSynAckCe{false};
+    uint32_t m_markDataCePkt{0};
+    uint32_t m_pktCount{0};
+};
+
+NS_OBJECT_ENSURE_REGISTERED(TcpSocketAccEcnCustom);
+
+/**
+ * \ingroup internet-test
+ * \brief Test 1-3: Accurate ECN 3WHS negotiation and fallback.
+ */
+class TcpAccEcnNegotiationTest : public TcpGeneralTest
+{
+  public:
+    TcpAccEcnNegotiationTest(TcpSocketBase::EcnMode_t senderMode,
+                             TcpSocketBase::EcnMode_t receiverMode,
+                             const std::string& desc)
+        : TcpGeneralTest(desc),
+          m_senderMode(senderMode),
+          m_receiverMode(receiverMode)
+    {
+    }
+
+  protected:
+    void ConfigureProperties() override
+    {
+        TcpGeneralTest::ConfigureProperties();
+        SetEcnMode(SENDER, m_senderMode);
+        SetEcnMode(RECEIVER, m_receiverMode);
+    }
+
+    void ConfigureEnvironment() override
+    {
+        TcpGeneralTest::ConfigureEnvironment();
+        SetAppPktCount(2);
+        SetAppPktSize(500);
+    }
+
+    void Tx(const Ptr<const Packet> p, const TcpHeader& h, SocketWho who) override
+    {
+        if (who == SENDER)
+        {
+            m_senderTxCount++;
+            if (h.GetFlags() & TcpHeader::SYN && !(h.GetFlags() & TcpHeader::ACK))
+            {
+                if (m_senderMode == TcpSocketBase::AccEcn)
+                {
+                    uint16_t expectedFlags =
+                        TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR | TcpHeader::AE;
+                    NS_TEST_ASSERT_MSG_EQ((h.GetFlags() & expectedFlags),
+                                          expectedFlags,
+                                          "Sender AccECN SYN must have SYN|ECE|CWR|AE");
+                }
+            }
+        }
+        else if (who == RECEIVER)
+        {
+            m_receiverTxCount++;
+            if (h.GetFlags() & TcpHeader::SYN && (h.GetFlags() & TcpHeader::ACK))
+            {
+                if (m_senderMode == TcpSocketBase::AccEcn && m_receiverMode == TcpSocketBase::AccEcn)
+                {
+                    // AccECN SYN-ACK
+                    uint16_t ecnFlags =
+                        h.GetFlags() & (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE);
+                    NS_TEST_ASSERT_MSG_NE(ecnFlags,
+                                          0,
+                                          "Receiver AccECN SYN-ACK must carry AccECN feedback");
+                }
+            }
+        }
+    }
+
+  private:
+    TcpSocketBase::EcnMode_t m_senderMode;
+    TcpSocketBase::EcnMode_t m_receiverMode;
+    uint32_t m_senderTxCount{0};
+    uint32_t m_receiverTxCount{0};
+};
+
+/**
+ * \ingroup internet-test
+ * \brief Test 4-6: Accurate ECN Handshake with CE markings on SYN / SYN-ACK.
+ */
+class TcpAccEcnHandshakeCeTest : public TcpGeneralTest
+{
+  public:
+    enum HandshakeCeCase
+    {
+        CE_ON_SYN,
+        CE_ON_SYN_ACK
+    };
+
+    TcpAccEcnHandshakeCeTest(HandshakeCeCase testCase, const std::string& desc)
+        : TcpGeneralTest(desc),
+          m_testCase(testCase)
+    {
+    }
+
+  protected:
+    Ptr<TcpSocketMsgBase> CreateSenderSocket(Ptr<Node> node) override
+    {
+        Ptr<TcpSocketAccEcnCustom> s = DynamicCast<TcpSocketAccEcnCustom>(
+            CreateSocket(node, TcpSocketAccEcnCustom::GetTypeId(), m_congControlTypeId));
+        if (m_testCase == CE_ON_SYN)
+        {
+            s->SetMarkSynCe(true);
+        }
+        return s;
+    }
+
+    Ptr<TcpSocketMsgBase> CreateReceiverSocket(Ptr<Node> node) override
+    {
+        Ptr<TcpSocketAccEcnCustom> s = DynamicCast<TcpSocketAccEcnCustom>(
+            CreateSocket(node, TcpSocketAccEcnCustom::GetTypeId(), m_congControlTypeId));
+        if (m_testCase == CE_ON_SYN_ACK)
+        {
+            s->SetMarkSynAckCe(true);
+        }
+        return s;
+    }
+
+    void ConfigureProperties() override
+    {
+        TcpGeneralTest::ConfigureProperties();
+        SetEcnMode(SENDER, TcpSocketBase::AccEcn);
+        SetEcnMode(RECEIVER, TcpSocketBase::AccEcn);
+        SetSegmentSize(SENDER, 1000);
+        SetSegmentSize(RECEIVER, 1000);
+        SetInitialCwnd(SENDER, 10);
+    }
+
+    void ConfigureEnvironment() override
+    {
+        TcpGeneralTest::ConfigureEnvironment();
+        SetAppPktCount(3);
+        SetAppPktSize(1000);
+    }
+
+    void Rx(const Ptr<const Packet> p, const TcpHeader& h, SocketWho who) override
+    {
+        if (who == SENDER && (h.GetFlags() & TcpHeader::SYN) && (h.GetFlags() & TcpHeader::ACK))
+        {
+            if (m_testCase == CE_ON_SYN)
+            {
+                // Receiver received CE on SYN, sent SYN|ACK|CWR|AE
+                uint16_t expectedFlags = TcpHeader::CWR | TcpHeader::AE;
+                NS_TEST_ASSERT_MSG_EQ((h.GetFlags() & expectedFlags),
+                                      expectedFlags,
+                                      "Receiver must echo CE on SYN using CWR|AE");
+            }
+        }
+    }
+
+  private:
+    HandshakeCeCase m_testCase;
+};
+
+/**
+ * \ingroup internet-test
+ * \brief Test 7-9: Unit test for Accurate ECN ACE encoding, decoding, and data counters.
+ */
+class TcpAccEcnDecodingTest : public TestCase
+{
+  public:
+    TcpAccEcnDecodingTest()
+        : TestCase("Accurate ECN ACE encoding and decoding and counter verification")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        Ptr<Node> node = CreateObject<Node>();
+        Ptr<TcpSocketBase> socket = CreateObject<TcpSocketBase>();
+        socket->SetNode(node);
+        socket->SetEcnMode(TcpSocketBase::AccEcn);
+
+        // Test ACE helpers
+        uint8_t aceValue = 0b101;
+        uint16_t flagWithAce = socket->SetAceFlags(aceValue);
+        NS_TEST_ASSERT_MSG_EQ(socket->GetAceFlags(flagWithAce),
+                              aceValue,
+                              "SetAceFlags and GetAceFlags mismatch");
+
+        // Test EncodeAceFlags modulo 8
+        NS_TEST_ASSERT_MSG_EQ(socket->EncodeAceFlags(0), 0, "0 mod 8 == 0");
+        NS_TEST_ASSERT_MSG_EQ(socket->EncodeAceFlags(5), 5, "5 mod 8 == 5");
+        NS_TEST_ASSERT_MSG_EQ(socket->EncodeAceFlags(8), 0, "8 mod 8 == 0");
+        NS_TEST_ASSERT_MSG_EQ(socket->EncodeAceFlags(13), 5, "13 mod 8 == 5");
+
+        // Test AccECN counter initialization
+        Ptr<TcpAccEcnData> accData = CreateObject<TcpAccEcnData>();
+        accData->IniSenderCounters();
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCepS.Get(), 5, "Sender initial cep must be 5");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE0bS.Get(), 1, "Sender initial e0b must be 1");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCebS.Get(), 0, "Sender initial ceb must be 0");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE1bS.Get(), 0, "Sender initial e1b must be 0");
+
+        accData->IniReceiverCounters();
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCepR.Get(), 5, "Receiver initial cep must be 5");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE0bR.Get(), 1, "Receiver initial e0b must be 1");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCebR.Get(), 0, "Receiver initial ceb must be 0");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE1bR.Get(), 0, "Receiver initial e1b must be 0");
+
+        // Test ACE delta calculations across modulo-8 wrap-around
+        uint8_t DIVACE = 8;
+        uint32_t sCep = 5;
+        // Step 1: ace = 6 (1 CE mark)
+        uint8_t ace1 = 6;
+        uint32_t delta1 = (ace1 + DIVACE - (sCep % DIVACE)) % DIVACE;
+        NS_TEST_ASSERT_MSG_EQ(delta1, 1, "Delta from ace 5 to 6 should be 1");
+        sCep += delta1; // sCep = 6
+
+        // Step 2: ace = 0 (2 CE marks, wrapping around 7 -> 0)
+        uint8_t ace2 = 0;
+        uint32_t delta2 = (ace2 + DIVACE - (sCep % DIVACE)) % DIVACE;
+        NS_TEST_ASSERT_MSG_EQ(delta2, 2, "Delta from ace 6 to 0 (wrap-around) should be 2");
+        sCep += delta2; // sCep = 8
+
+        // Step 3: ace = 3 (3 CE marks)
+        uint8_t ace3 = 3;
+        uint32_t delta3 = (ace3 + DIVACE - (sCep % DIVACE)) % DIVACE;
+        NS_TEST_ASSERT_MSG_EQ(delta3, 3, "Delta from ace 0 (8) to 3 should be 3");
+        sCep += delta3; // sCep = 11
+        NS_TEST_ASSERT_MSG_EQ(sCep, 11, "Accumulated cepS must be 11");
+    }
+};
+
+/**
+ * \ingroup internet-test
+ * \brief Test: Full AccECN Data Transfer Test.
+ */
+class TcpAccEcnTransferTest : public TcpGeneralTest
+{
+  public:
+    TcpAccEcnTransferTest(const std::string& desc)
+        : TcpGeneralTest(desc)
+    {
+    }
+
+  protected:
+    void ConfigureProperties() override
+    {
+        TcpGeneralTest::ConfigureProperties();
+        SetEcnMode(SENDER, TcpSocketBase::AccEcn);
+        SetEcnMode(RECEIVER, TcpSocketBase::AccEcn);
+    }
+
+    void ConfigureEnvironment() override
+    {
+        TcpGeneralTest::ConfigureEnvironment();
+        SetAppPktCount(10);
+        SetAppPktSize(1000);
+    }
+
+    void FinalChecks() override
+    {
+        NS_TEST_ASSERT_MSG_GT(m_pktsAcked, 0, "AccECN connection must transfer and ack data");
+    }
+
+    void ProcessedAck(const Ptr<const TcpSocketState> tcb, const TcpHeader& h, SocketWho who) override
+    {
+        if (who == SENDER)
+        {
+            m_pktsAcked++;
+        }
+    }
+
+  private:
+    uint32_t m_pktsAcked{0};
+};
+
+/**
+ * \ingroup internet-test
+ * \brief TestSuite for Accurate ECN (AccECN).
+ */
+class TcpAccEcnTestSuite : public TestSuite
+{
+  public:
+    TcpAccEcnTestSuite()
+        : TestSuite("tcp-accecn", Type::UNIT)
+    {
+        // 1. Sender AccECN, Receiver AccECN
+        AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::AccEcn,
+                                                TcpSocketBase::AccEcn,
+                                                "AccECN 3WHS: AccECN Sender and AccECN Receiver"),
+                    TestCase::Duration::QUICK);
+
+        // 2. Sender AccECN, Receiver Classic ECN (Fallback to EcnPp)
+        AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::AccEcn,
+                                                TcpSocketBase::ClassicEcn,
+                                                "AccECN Fallback: AccECN Sender to Classic ECN"),
+                    TestCase::Duration::QUICK);
+
+        // 3. Sender AccECN, Receiver No ECN (Fallback to NoEcn)
+        AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::AccEcn,
+                                                TcpSocketBase::NoEcn,
+                                                "AccECN Fallback: AccECN Sender to No ECN"),
+                    TestCase::Duration::QUICK);
+
+        // 4. Sender Classic ECN, Receiver AccECN (Fallback to EcnPp)
+        AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::ClassicEcn,
+                                                TcpSocketBase::AccEcn,
+                                                "AccECN Fallback: Classic ECN Sender to AccECN"),
+                    TestCase::Duration::QUICK);
+
+        // 5. Sender No ECN, Receiver AccECN (Fallback to NoEcn)
+        AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::NoEcn,
+                                                TcpSocketBase::AccEcn,
+                                                "AccECN Fallback: No ECN Sender to AccECN"),
+                    TestCase::Duration::QUICK);
+
+        // 6. CE on SYN
+        AddTestCase(new TcpAccEcnHandshakeCeTest(TcpAccEcnHandshakeCeTest::CE_ON_SYN,
+                                                "AccECN Handshake: CE on SYN packet"),
+                    TestCase::Duration::QUICK);
+
+        // 7. CE on SYN-ACK
+        AddTestCase(new TcpAccEcnHandshakeCeTest(TcpAccEcnHandshakeCeTest::CE_ON_SYN_ACK,
+                                                "AccECN Handshake: CE on SYN-ACK packet"),
+                    TestCase::Duration::QUICK);
+
+        // 8. Decoding, modulo-8 wrap-around & Counter unit tests
+        AddTestCase(new TcpAccEcnDecodingTest(), TestCase::Duration::QUICK);
+
+        // 9. Full data transfer test
+        AddTestCase(new TcpAccEcnTransferTest("AccECN Full Data Transfer"),
+                    TestCase::Duration::QUICK);
+    }
+};
+
+static TcpAccEcnTestSuite g_tcpAccEcnTestSuite;
+
+} // namespace ns3

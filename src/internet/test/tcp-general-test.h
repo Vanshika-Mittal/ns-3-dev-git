@@ -192,7 +192,7 @@ class TcpSocketSmallAcks : public TcpSocketMsgBase
     }
 
   protected:
-    void SendEmptyPacket(uint8_t flags) override;
+    void SendEmptyPacket(uint16_t flags) override;
     Ptr<TcpSocketBase> Fork() override;
 
     uint32_t m_bytesToAck;           //!< Number of bytes to be ACKed.
@@ -595,6 +595,14 @@ class TcpGeneralTest : public TestCase
      * @param useEcn Value representing the mode of ECN usage requested
      */
     void SetUseEcn(SocketWho who, TcpSocketState::UseEcn_t useEcn);
+
+    /**
+     * @brief Forcefully set the ECN mode
+     *
+     * @param who socket to force
+     * @param ecnMode Value representing the mode of ECN requested
+     */
+    void SetEcnMode(SocketWho who, TcpSocketBase::EcnMode_t ecnMode);
 
     /**
      * @brief Enable or disable pacing in the TCP socket

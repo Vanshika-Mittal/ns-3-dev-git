@@ -128,6 +128,8 @@ class TcpSocketState : public Object
         ClassicEcn, //!< ECN functionality as described in RFC 3168.
         DctcpEcn,   //!< ECN functionality as described in RFC 8257. Note: this mode is specific to
                     //!< DCTCP.
+        EcnPp,      //!< ECN functionality as described in ECN++ draft.
+        AccEcn      //!< ECN functionality as described in draft-ietf-tcpm-accurate-ecn.
     };
 
     /**
@@ -142,8 +144,10 @@ class TcpSocketState : public Object
         ECN_CE_RCVD,     //!< Last packet received had CE bit set in IP header
         ECN_SENDING_ECE, //!< Receiver sends an ACK with ECE bit set in TCP header
         ECN_ECE_RCVD,    //!< Last ACK received had ECE bit set in TCP header
-        ECN_CWR_SENT //!< Sender has reduced the congestion window, and sent a packet with CWR bit
-                     //!< set in TCP header. This state is used for tracing.
+        ECN_CWR_SENT,    //!< Sender has reduced the congestion window, and sent a packet with CWR bit
+                         //!< set in TCP header. This state is used for tracing.
+        ECN_ECT0_RCVD,   //!< Last packet received had ECT0 bit set in IP header, only used in AccECN
+        ECN_ECT1_RCVD    //!< Last packet received had ECT1 bit set in IP header, only used in AccECN
     };
 
     /**
@@ -154,7 +158,7 @@ class TcpSocketState : public Object
     /**
      * @brief Literal names of ECN states for use in log messages
      */
-    INTERNET_EXPORT static const char* const EcnStateName[TcpSocketState::ECN_CWR_SENT + 1];
+    INTERNET_EXPORT static const char* const EcnStateName[TcpSocketState::ECN_ECT1_RCVD + 1];
 
     // Congestion control
     TracedValue<uint32_t> m_cWnd{0}; //!< Congestion window
@@ -180,6 +184,7 @@ class TcpSocketState : public Object
 
     TracedValue<EcnState_t> m_ecnState{
         ECN_DISABLED}; //!< Current ECN State, represented as combination of EcnState values
+    bool m_isEcnBitFlipped{false}; //!< Record whether ECN bit flipped in IP header, only used in AccEcn
 
     TracedValue<SequenceNumber32> m_highTxMark{0}; //!< Highest seqno ever sent, regardless of ReTx
     TracedValue<SequenceNumber32> m_nextTxSequence{
@@ -239,7 +244,7 @@ class TcpSocketState : public Object
     /**
      * Callback to send an empty packet
      */
-    Callback<void, uint8_t> m_sendEmptyPacketCallback;
+    Callback<void, uint16_t> m_sendEmptyPacketCallback;
 };
 
 namespace TracedValueCallback
