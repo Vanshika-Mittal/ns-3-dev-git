@@ -174,71 +174,63 @@ TcpOptionUnknown::GetKind() const
 NS_OBJECT_ENSURE_REGISTERED (TcpOptionExperimental);
 
 TypeId
-TcpOptionExperimental::GetTypeId (void)
+TcpOptionExperimental::GetTypeId()
 {
-  static TypeId tid = TypeId ("ns3::TcpOptionExperimental")
-          .SetParent<Object> ()
-          .SetGroupName ("Internet")
-  ;
-  return tid;
+    static TypeId tid = TypeId("ns3::TcpOptionExperimental")
+                            .SetParent<TcpOption>()
+                            .SetGroupName("Internet");
+    return tid;
 }
 
-TcpOptionExperimental::TcpOptionExperimental ()
+TcpOptionExperimental::TcpOptionExperimental()
     : TcpOption()
 {
 }
 
-TcpOptionExperimental::~TcpOptionExperimental ()
+TcpOptionExperimental::~TcpOptionExperimental()
 {
-}
-
-TypeId
-TcpOptionExperimental::GetInstanceTypeId (void) const
-{
-  return GetTypeId ();
 }
 
 uint8_t
-TcpOptionExperimental::GetKind (void) const
+TcpOptionExperimental::GetKind() const
 {
-  return TcpOption::EXPERIMENTAL;
+    return TcpOption::EXPERIMENTAL;
 }
 
 bool
-TcpOptionExperimental::IsExIDKnown (uint16_t magicNumber)
+TcpOptionExperimental::IsExIDKnown(uint16_t magicNumber)
 {
-  switch (magicNumber)
-  {
+    switch (magicNumber)
+    {
     case ACCECN:
-      return true;
-  }
-  return false;
+        return true;
+    }
+    return false;
 }
 
 Ptr<TcpOption>
-TcpOptionExperimental::CreateOptionExperimental (uint16_t exid)
+TcpOptionExperimental::CreateOptionExperimental(uint16_t exid)
 {
-  struct exidToTid
-  {
-      TcpOptionExperimental::ExID exid;
-      TypeId tid;
-  };
-
-  static ObjectFactory objectFactory;
-  static exidToTid toTid[] =
+    struct ExidToTid
     {
-      { TcpOptionExperimental::ACCECN,           TcpOptionAccEcn::GetTypeId () },
+        TcpOptionExperimental::ExID exid;
+        TypeId tid;
     };
 
-  for (unsigned int i = 0; i < sizeof (toTid) / sizeof (exidToTid); ++i)
-  {
-    if (toTid[i].exid == exid)
+    static ObjectFactory objectFactory;
+    static ExidToTid toTid[] = {
+        {TcpOptionExperimental::ACCECN, TcpOptionAccEcn::GetTypeId()},
+    };
+
+    for (unsigned int i = 0; i < sizeof(toTid) / sizeof(ExidToTid); ++i)
     {
-      objectFactory.SetTypeId (toTid[i].tid);
-      return objectFactory.Create<TcpOption> ();
+        if (toTid[i].exid == exid)
+        {
+            objectFactory.SetTypeId(toTid[i].tid);
+            return objectFactory.Create<TcpOption>();
+        }
     }
-  }
-  return CreateObject<TcpOptionUnknown> ();
+    return CreateObject<TcpOptionUnknown>();
 }
 
 

@@ -158,16 +158,15 @@ public:
      * \brief Get the type ID.
      * \return the object TypeId
      */
-    static TypeId GetTypeId (void);
-    virtual TypeId GetInstanceTypeId (void) const;
-    virtual uint8_t GetKind (void) const;
+    static TypeId GetTypeId();
+    uint8_t GetKind() const override;
     /**
-     * \brief Get the `magic number' (as in \RFC{6994}) of this option
-     * \return the magic number in Experimental Option
+     * @brief Get the `magic number' (as in RFC 6994) of this option
+     * @return the magic number in Experimental Option
      */
-    virtual uint16_t GetExID (void) const = 0;
-    static bool IsExIDKnown (uint16_t magicNumber);
-    static Ptr<TcpOption> CreateOptionExperimental (uint16_t exid);
+    virtual uint16_t GetExID() const = 0;
+    static bool IsExIDKnown(uint16_t magicNumber);
+    static Ptr<TcpOption> CreateOptionExperimental(uint16_t exid);
 };
 
 
