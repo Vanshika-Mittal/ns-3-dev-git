@@ -1187,6 +1187,8 @@ The following enum represents the mode of ECN::
   {
       ClassicEcn,  //!< ECN functionality as described in RFC 3168.
       DctcpEcn,    //!< ECN functionality as described in RFC 8257. Note: this mode is specific to DCTCP.
+      EcnPp,       //!< ECN functionality as described in draft-ietf-tcpm-generalized-ecn.
+      AccEcn,      //!< ECN functionality as described in draft-ietf-tcpm-accurate-ecn.
   };
 
 The following are some important ECN parameters::
@@ -1318,6 +1320,122 @@ The following issues are yet to be addressed:
    outgoing TCP sessions (e.g. a TCP may perform ECN echoing but not set the
    ECT codepoints on its outbound data segments).
 
+AccEcn: More Accurate ECN Feedback in TCP
++++++++++++++++++++++++++++++++++++++++++
+
+Some new TCP mechanisms like Congestion Exposure (ConEx), Data Center TCP (DCTCP)
+or Low Latency Low Loss Scalable Throughput (L4S) need more accurate
+ECN feedback information whenever more than one marking is received in one RTT.
+AccEcn provides more than one feedback signal per RTT in the TCP header.
+More information is available in the AccEcn draft: https://tools.ietf.org/html/draft-ietf-tcpm-accurate-ecn-07
+
+Enabling AccEcn
+^^^^^^^^^^^^^^^
+
+By default, support for AccEcn is disabled in TCP sockets. To enable, change the
+value of the attribute ``ns3::TcpSocketBase::EcnMode`` to ``AccEcn``, and enable ECN
+via ``ns3::TcpSocketBase::UseEcn``.
+
+::
+
+  Config::SetDefault("ns3::TcpSocketBase::UseEcn", StringValue("On"));
+  Config::SetDefault("ns3::TcpSocketBase::EcnMode", StringValue("AccEcn"));
+
+AccEcn negotiation
+^^^^^^^^^^^^^^^^^^
+
+AccEcn re-allocates the TCP flag at bit 7 of the TCP header as the AE (Accurate ECN) flag.
+
+1. Sender sends SYN:
+CWR + ECE + AE are set if the sender is AccEcn enabled.
+
+::
+
+  if (m_ecnMode == EcnMode_t::AccEcn)
+  {
+      SendEmptyPacket(TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR | TcpHeader::AE);
+  }
+
+2. Receiver sends SYN + ACK:
+Receiver sets the corresponding CWR, ECE and AE bits
+to feedback what ECN marking was received on the SYN packet to the sender.
+
+::
+
+  if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD) // CE on SYN
+  {
+      SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::CWR | TcpHeader::AE);
+  }
+  else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT0_RCVD) // ECT0 on SYN
+  {
+      SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::AE);
+  }
+  else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT1_RCVD) // ECT1 on SYN
+  {
+      SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::ECE | TcpHeader::CWR);
+  }
+  else // NOT-ECT on SYN
+  {
+      SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::CWR);
+  }
+
+3. Sender sends ACK:
+A host MUST interpret the AE, CWR and ECE flags as the 3-bit ACE
+counter on a segment with the SYN flag cleared (SYN=0) that it sends
+or receives if both of its half-connections are set into AccECN mode
+having successfully negotiated AccECN.
+
+On the final ACK of the 3WHS, a TCP client (A) in AccECN mode MUST
+use the ACE field to feedback which of the 4 possible values of
+the IP-ECN field were on the SYN/ACK.
+
+::
+
+  if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD) // CE on SYN/ACK
+  {
+      uint16_t flags = SetAceFlags(0b110);
+      SendEmptyPacket(TcpHeader::ACK | flags);
+  }
+  else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT0_RCVD) // ECT0 on SYN/ACK
+  {
+      uint16_t flags = SetAceFlags(0b100);
+      SendEmptyPacket(TcpHeader::ACK | flags);
+  }
+  else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT1_RCVD) // ECT1 on SYN/ACK
+  {
+      uint16_t flags = SetAceFlags(0b011);
+      SendEmptyPacket(TcpHeader::ACK | flags);
+  }
+  else // NOT-ECT on SYN/ACK
+  {
+      uint16_t flags = SetAceFlags(0b010);
+      SendEmptyPacket(TcpHeader::ACK | flags);
+  }
+
+AccEcn Counters
+^^^^^^^^^^^^^^^
+Each data receiver of each half connection maintains four counters,
+``r.cep``, ``r.ceb``, ``r.e0b`` and ``r.e1b``.
+
+1. The CE packet counter (``r.cep``), counts the number of packets the host receives with
+   the CE code point in the IP ECN field, including CE marks on control packets without data.
+2. ``r.ceb``, ``r.e0b`` and ``r.e1b`` count the number of TCP payload bytes in packets marked
+   respectively with the CE, ECT(0) and ECT(1) codepoint in their IP-ECN field.
+
+These counters are maintained in ``Ptr<TcpAccEcnData> m_accEcnData`` in ``TcpSocketBase``.
+``r.cep`` is reflected in the 3-bit ACE field in the TCP header.
+
+AccEcn compliance
+^^^^^^^^^^^^^^^^^
+
+Based on the suggestions provided in the AccEcn draft, the following behavior has
+been implemented:
+
+1. During negotiation, end points use 3 bits (ECE, CWR and AE) in the TCP header
+   to perform AccEcn negotiation; after negotiation, the end point encodes ``r.cep`` into
+   these 3 bits, named ACE, to feedback how many packets were received with CE mark.
+2. AccEcn counters maintain both packet-based and byte-based ECN marking counts.
+
 Support for Dynamic Pacing
 ++++++++++++++++++++++++++
 
@@ -1433,6 +1551,7 @@ section below on :ref:`Writing-tcp-tests`.
 * **tcp-zero-window-test:** Unit test persist behavior for zero window conditions
 * **tcp-close-test:** Unit test on the socket closing: both receiver and sender have to close their socket when all bytes are transferred
 * **tcp-ecn-test:** Unit tests on Explicit Congestion Notification
+* **tcp-accecn:** Unit tests on Accurate ECN (AccECN)
 * **tcp-pacing-test:** Unit tests on dynamic TCP pacing rate
 
 Several tests have dependencies outside of the ``internet`` module, so they
