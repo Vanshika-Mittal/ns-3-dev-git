@@ -597,8 +597,7 @@ class TcpSocketBase : public TcpSocket
     {
         NoEcn = 0,
         ClassicEcn = 1,
-        EcnPp = 2,
-        AccEcn = 3
+        AccEcn = 2
     };
 
     /**
@@ -686,8 +685,7 @@ class TcpSocketBase : public TcpSocket
      * @brief Checks if a TCP packet should be ECN-capable (ECT) according to the TcpPacketType and
      * ECN mode.
      *
-     * Currently, only Classic ECN and DCTCP ECN modes are supported, with
-     * potential extensions for future modes (Ecnpp).
+     * Currently, Classic ECN, DCTCP ECN, and AccECN modes are supported.
      *
      * @param packetType The type of the TCP packet, represented by an enum TcpPacketType.
      * @return true if the packet is ECN-capable (ECT), false otherwise.

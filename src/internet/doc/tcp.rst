@@ -1187,7 +1187,6 @@ The following enum represents the mode of ECN::
   {
       ClassicEcn,  //!< ECN functionality as described in RFC 3168.
       DctcpEcn,    //!< ECN functionality as described in RFC 8257. Note: this mode is specific to DCTCP.
-      EcnPp,       //!< ECN functionality as described in draft-ietf-tcpm-generalized-ecn.
       AccEcn,      //!< ECN functionality as described in draft-ietf-tcpm-accurate-ecn.
   };
 
