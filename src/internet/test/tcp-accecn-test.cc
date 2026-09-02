@@ -482,7 +482,7 @@ class TcpAccEcnTestSuite : public TestSuite
                                                 "AccECN 3WHS: AccECN Sender and AccECN Receiver"),
                     TestCase::Duration::QUICK);
 
-        // 2. Sender AccECN, Receiver Classic ECN (Fallback to EcnPp)
+        // 2. Sender AccECN, Receiver Classic ECN (Fallback to Classic ECN)
         AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::AccEcn,
                                                 TcpSocketBase::ClassicEcn,
                                                 "AccECN Fallback: AccECN Sender to Classic ECN"),
@@ -494,7 +494,7 @@ class TcpAccEcnTestSuite : public TestSuite
                                                 "AccECN Fallback: AccECN Sender to No ECN"),
                     TestCase::Duration::QUICK);
 
-        // 4. Sender Classic ECN, Receiver AccECN (Fallback to EcnPp)
+        // 4. Sender Classic ECN, Receiver AccECN (Fallback to Classic ECN)
         AddTestCase(new TcpAccEcnNegotiationTest(TcpSocketBase::ClassicEcn,
                                                 TcpSocketBase::AccEcn,
                                                 "AccECN Fallback: Classic ECN Sender to AccECN"),

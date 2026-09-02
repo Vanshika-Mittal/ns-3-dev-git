@@ -85,16 +85,6 @@ const std::map<std::pair<ns3::TcpSocketBase::TcpPacketType_t, ns3::TcpSocketStat
         {{ns3::TcpSocketBase::RE_XMT, ns3::TcpSocketState::DctcpEcn}, true},
         {{ns3::TcpSocketBase::DATA, ns3::TcpSocketState::DctcpEcn}, true},
 
-        // EcnPp
-        {{ns3::TcpSocketBase::SYN, ns3::TcpSocketState::EcnPp}, false},
-        {{ns3::TcpSocketBase::SYN_ACK, ns3::TcpSocketState::EcnPp}, true},
-        {{ns3::TcpSocketBase::PURE_ACK, ns3::TcpSocketState::EcnPp}, false},
-        {{ns3::TcpSocketBase::WINDOW_PROBE, ns3::TcpSocketState::EcnPp}, false},
-        {{ns3::TcpSocketBase::FIN, ns3::TcpSocketState::EcnPp}, true},
-        {{ns3::TcpSocketBase::RST, ns3::TcpSocketState::EcnPp}, true},
-        {{ns3::TcpSocketBase::RE_XMT, ns3::TcpSocketState::EcnPp}, false},
-        {{ns3::TcpSocketBase::DATA, ns3::TcpSocketState::EcnPp}, true},
-
         // AccEcn
         {{ns3::TcpSocketBase::SYN, ns3::TcpSocketState::AccEcn}, true},
         {{ns3::TcpSocketBase::SYN_ACK, ns3::TcpSocketState::AccEcn}, true},
@@ -232,8 +222,6 @@ TcpSocketBase::GetTypeId()
                                           "NoEcn",
                                           ClassicEcn,
                                           "ClassicEcn",
-                                          EcnPp,
-                                          "EcnPp",
                                           AccEcn,
                                           "AccEcn"))
             .AddAttribute("UseAbe",
@@ -1031,7 +1019,7 @@ TcpSocketBase::Recv(uint32_t maxSize, uint32_t flags)
         oldWin < m_tcb->m_segmentSize && newWin > oldWin &&
         newWin >= std::min(m_tcb->m_segmentSize, GetRcvBufSize() / 2))
     {
-        if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+        if ((m_ecnMode == EcnMode_t::ClassicEcn ||
              m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
             (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
              m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
@@ -1645,7 +1633,7 @@ TcpSocketBase::ProcessEstablished(Ptr<Packet> packet, const TcpHeader& tcpHeader
 
             // Receiver sets ECE flags when it receives a packet with CE bit on or sender hasn't
             // responded to ECN echo sent by receiver
-            if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+            if ((m_ecnMode == EcnMode_t::ClassicEcn ||
                  m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
                 (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
                  m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
@@ -3808,7 +3796,7 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
         m_tcb->m_rxBuffer->NextRxSequence() > expectedSeq + p->GetSize())
     { // A gap exists in the buffer, or we filled a gap: Always ACK
         m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
-        if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+        if ((m_ecnMode == EcnMode_t::ClassicEcn ||
              m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
             (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
              m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
@@ -3829,7 +3817,7 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
             m_delAckEvent.Cancel();
             m_delAckCount = 0;
             m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
-            if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+            if ((m_ecnMode == EcnMode_t::ClassicEcn ||
                  m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
                 (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
                  m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
@@ -4146,7 +4134,7 @@ TcpSocketBase::DelAckTimeout()
 {
     m_delAckCount = 0;
     m_congestionControl->CwndEvent(m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-    if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+    if ((m_ecnMode == EcnMode_t::ClassicEcn ||
          m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
         (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
          m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
@@ -4346,7 +4334,7 @@ TcpSocketBase::SetRcvBufSize(uint32_t size)
      */
     if (oldSize < size && m_connected)
     {
-        if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+        if ((m_ecnMode == EcnMode_t::ClassicEcn ||
              m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
             (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
              m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
@@ -5050,7 +5038,7 @@ RttHistory::RttHistory(const RttHistory& h)
 }
 
 const char* const TcpSocketBase::EcnModeName[TcpSocketBase::AccEcn + 1] = {
-    "NoEcn", "ClassicEcn", "EcnPp", "AccEcn"};
+    "NoEcn", "ClassicEcn", "AccEcn"};
 
 void
 TcpSocketBase::SetEcnMode(EcnMode_t ecnMode)
@@ -5066,11 +5054,6 @@ TcpSocketBase::SetEcnMode(EcnMode_t ecnMode)
     {
         m_tcb->m_useEcn = TcpSocketState::On;
         m_tcb->m_ecnMode = TcpSocketState::AccEcn;
-    }
-    else if (m_ecnMode == EcnPp)
-    {
-        m_tcb->m_useEcn = TcpSocketState::On;
-        m_tcb->m_ecnMode = TcpSocketState::EcnPp;
     }
     else
     {
@@ -5145,7 +5128,7 @@ TcpSocketBase::CheckEcnInIpv4(const Ipv4Header& header,
 {
     NS_LOG_FUNCTION(this << header << tcpHeader << tcpPayloadSize);
     if ((m_ecnMode == EcnMode_t::ClassicEcn && m_state == ESTABLISHED) ||
-        m_ecnMode == EcnMode_t::EcnPp || m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
+        m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
     {
         bool detectCE =
             !(tcpHeader.GetFlags() & TcpHeader::RST || tcpHeader.GetFlags() & TcpHeader::FIN);
@@ -5214,7 +5197,7 @@ TcpSocketBase::CheckEcnInIpv6(const Ipv6Header& header,
 {
     NS_LOG_FUNCTION(this << header << tcpHeader << tcpPayloadSize);
     if ((m_ecnMode == EcnMode_t::ClassicEcn && m_state == ESTABLISHED) ||
-        m_ecnMode == EcnMode_t::EcnPp || m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
+        m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
     {
         bool detectCE =
             !(tcpHeader.GetFlags() & TcpHeader::RST || tcpHeader.GetFlags() & TcpHeader::FIN);
@@ -5320,8 +5303,9 @@ TcpSocketBase::CheckEcnRvdSyn(const TcpHeader& tcpHeader)
         }
         else if (ecnflags == (TcpHeader::CWR | TcpHeader::ECE))
         {
-            NS_LOG_DEBUG(EcnModeName[m_ecnMode] << " -> EcnPp");
-            m_ecnMode = EcnMode_t::EcnPp;
+            NS_LOG_DEBUG(EcnModeName[m_ecnMode] << " -> ClassicEcn");
+            m_ecnMode = EcnMode_t::ClassicEcn;
+            m_tcb->m_ecnMode = TcpSocketState::ClassicEcn;
         }
         else
         {
@@ -5330,7 +5314,7 @@ TcpSocketBase::CheckEcnRvdSyn(const TcpHeader& tcpHeader)
         }
     }
 
-    if (m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+    if (m_ecnMode == EcnMode_t::ClassicEcn ||
         m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
     {
         uint16_t ecnflags = tcpHeader.GetFlags() & (TcpHeader::CWR | TcpHeader::ECE);
@@ -5374,8 +5358,9 @@ TcpSocketBase::CheckEcnRvdSynAck(const TcpHeader& tcpHeader)
 
         if (ecnflags == TcpHeader::ECE || ecnflags == (TcpHeader::ECE | TcpHeader::AE))
         {
-            NS_LOG_DEBUG(EcnModeName[m_ecnMode] << " -> EcnPp");
-            m_ecnMode = EcnMode_t::EcnPp;
+            NS_LOG_DEBUG(EcnModeName[m_ecnMode] << " -> ClassicEcn");
+            m_ecnMode = EcnMode_t::ClassicEcn;
+            m_tcb->m_ecnMode = TcpSocketState::ClassicEcn;
         }
         else if (ecnflags == 0 ||
                  ecnflags == (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE))
@@ -5426,7 +5411,7 @@ TcpSocketBase::CheckEcnRvdSynAck(const TcpHeader& tcpHeader)
         }
     }
 
-    if (m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp ||
+    if (m_ecnMode == EcnMode_t::ClassicEcn ||
         m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
     {
         uint16_t ecnflags = tcpHeader.GetFlags() & (TcpHeader::CWR | TcpHeader::ECE);
@@ -5456,13 +5441,7 @@ TcpSocketBase::CheckEcnRvdLastAck(const TcpHeader& tcpHeader)
     NS_LOG_FUNCTION(this << tcpHeader);
     NS_ASSERT(!(tcpHeader.GetFlags() & TcpHeader::SYN) && (tcpHeader.GetFlags() & TcpHeader::ACK));
 
-    if (m_ecnMode == EcnMode_t::EcnPp && (tcpHeader.GetFlags() & TcpHeader::ECE))
-    {
-        NS_LOG_DEBUG("SET IW to 1 SMSS");
-        m_tcb->m_cWnd = 1 * m_tcb->m_segmentSize;
-        m_tcb->m_cWndInfl = m_tcb->m_cWnd;
-    }
-    else if (m_ecnMode == EcnMode_t::AccEcn)
+    if (m_ecnMode == EcnMode_t::AccEcn)
     {
         m_accEcnData->IniSenderCounters();
         uint8_t ace = GetAceFlags(tcpHeader.GetFlags());
@@ -5487,7 +5466,7 @@ TcpSocketBase::CheckEcnRvdLastAck(const TcpHeader& tcpHeader)
 bool
 TcpSocketBase::IsEcnRvdEce(const TcpHeader& tcpHeader)
 {
-    if ((m_ecnMode == EcnMode_t::ClassicEcn || m_ecnMode == EcnMode_t::EcnPp) &&
+    if (m_ecnMode == EcnMode_t::ClassicEcn &&
         (tcpHeader.GetFlags() & (TcpHeader::SYN | TcpHeader::ECE)) == TcpHeader::ECE)
     {
         return true;
