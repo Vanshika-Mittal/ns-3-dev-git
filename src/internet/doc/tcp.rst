@@ -1424,6 +1424,14 @@ Each data receiver of each half connection maintains four counters,
 These counters are maintained in ``Ptr<TcpAccEcnData> m_accEcnData`` in ``TcpSocketBase``.
 ``r.cep`` is reflected in the 3-bit ACE field in the TCP header.
 
+AccEcn TCP Option
+^^^^^^^^^^^^^^^^^
+
+The AccECN mechanism uses a TCP option to transmit more accurate and comprehensive
+ECN feedback. ``ns3::TcpOptionAccEcn`` is implemented as a subclass of ``ns3::TcpOptionExperimental``
+and carries the ECT(0), CE, and ECT(1) byte counters (``r.e0b``, ``r.ceb``, ``r.e1b``) as 3-byte fields.
+This uses the experimental option kind (254) with ExID 0xACCE.
+
 AccEcn compliance
 ^^^^^^^^^^^^^^^^^
 
