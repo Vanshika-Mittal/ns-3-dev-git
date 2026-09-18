@@ -29,6 +29,8 @@
 #include "ns3/point-to-point-module.h"
 #include "ns3/traffic-control-module.h"
 
+#include <filesystem>
+
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("TcpAccEcnExample");
@@ -45,7 +47,7 @@ TraceSocketAccEcn(Ptr<Node> node)
 {
     Config::ConnectWithoutContext("/NodeList/" + std::to_string(node->GetId()) +
                                       "/$ns3::TcpL4Protocol/SocketList/*/$ns3::TcpSocketBase/CongestionWindow",
-                                  MakeCallback(&CwndTracer));
+                                   MakeCallback(&CwndTracer));
 }
 
 int
@@ -53,11 +55,17 @@ main(int argc, char* argv[])
 {
     std::string tcpTypeId = "TcpCubic";
     bool enableAccEcn = true;
+    bool enablePcap = true;
+    std::string pcapDir = "pcap_results";
+    bool enableOptions = false; // By default without standard options (TS, SACK, WinScale)
     double stopTime = 10.0;
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("tcpTypeId", "TCP variant to use", tcpTypeId);
     cmd.AddValue("enableAccEcn", "Enable Accurate ECN on TCP sockets", enableAccEcn);
+    cmd.AddValue("pcap", "Enable PCAP packet capture", enablePcap);
+    cmd.AddValue("pcapDir", "Directory to store PCAP files", pcapDir);
+    cmd.AddValue("enableOptions", "Enable standard TCP options (Timestamp, SACK, WinScale)", enableOptions);
     cmd.AddValue("stopTime", "Stop time of the simulation (seconds)", stopTime);
     cmd.Parse(argc, argv);
 
@@ -69,6 +77,17 @@ main(int argc, char* argv[])
         Config::SetDefault("ns3::TcpSocketBase::EcnMode", EnumValue(TcpSocketBase::AccEcn));
         Config::SetDefault("ns3::TcpSocketBase::UseEcn", EnumValue(TcpSocketState::On));
     }
+
+    if (!enableOptions)
+    {
+        // Disable standard TCP options so packets contain only standard TCP header and AccECN flags
+        Config::SetDefault("ns3::TcpSocketBase::Timestamp", BooleanValue(false));
+        Config::SetDefault("ns3::TcpSocketBase::Sack", BooleanValue(false));
+        Config::SetDefault("ns3::TcpSocketBase::WindowScaling", BooleanValue(false));
+    }
+
+    // Set the device queue to 1 packet so packets back up in the RED QueueDisc
+    Config::SetDefault("ns3::DropTailQueue<Packet>::MaxSize", QueueSizeValue(QueueSize("1p")));
 
     NodeContainer nodes;
     nodes.Create(4);
@@ -97,13 +116,25 @@ main(int argc, char* argv[])
     tchRed.SetRootQueueDisc("ns3::RedQueueDisc",
                             "UseEcn",
                             BooleanValue(true),
+                            "LinkBandwidth",
+                            DataRateValue(DataRate("10Mbps")),
+                            "LinkDelay",
+                            TimeValue(MilliSeconds(10)),
                             "MinTh",
-                            DoubleValue(5),
+                            DoubleValue(2),
                             "MaxTh",
-                            DoubleValue(15),
+                            DoubleValue(8),
+                            "QW",
+                            DoubleValue(0.05),
                             "MaxSize",
                             StringValue("100p"));
     tchRed.Install(d1d2);
+
+    if (enablePcap)
+    {
+        std::filesystem::create_directories(pcapDir);
+        bottleneckLink.EnablePcapAll(pcapDir + "/tcp-accecn");
+    }
 
     Ipv4AddressHelper address;
     address.SetBase("10.1.1.0", "255.255.255.0");
