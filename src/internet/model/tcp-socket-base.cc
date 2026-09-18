@@ -2017,25 +2017,28 @@ TcpSocketBase::ReceivedAck(Ptr<Packet> packet, const TcpHeader& tcpHeader)
         }
     }
 
-    if (ackNumber > oldHeadSequence && (m_tcb->m_ecnState != TcpSocketState::ECN_DISABLED) &&
-        (tcpHeader.GetFlags() & TcpHeader::ECE))
+    if (m_ecnMode == EcnMode_t::ClassicEcn || m_tcb->m_ecnMode == TcpSocketState::DctcpEcn)
     {
-        if (m_ecnEchoSeq < ackNumber)
+        if (ackNumber > oldHeadSequence && (m_tcb->m_ecnState != TcpSocketState::ECN_DISABLED) &&
+            (tcpHeader.GetFlags() & TcpHeader::ECE))
         {
-            NS_LOG_INFO("Received ECN Echo is valid");
-            m_ecnEchoSeq = ackNumber;
-            NS_LOG_DEBUG(TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_ECE_RCVD");
-            m_tcb->m_ecnState = TcpSocketState::ECN_ECE_RCVD;
-            if (m_tcb->m_congState != TcpSocketState::CA_CWR)
+            if (m_ecnEchoSeq < ackNumber)
             {
-                EnterCwr(currentDelivered);
+                NS_LOG_INFO("Received ECN Echo is valid");
+                m_ecnEchoSeq = ackNumber;
+                NS_LOG_DEBUG(TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_ECE_RCVD");
+                m_tcb->m_ecnState = TcpSocketState::ECN_ECE_RCVD;
+                if (m_tcb->m_congState != TcpSocketState::CA_CWR)
+                {
+                    EnterCwr(currentDelivered);
+                }
             }
         }
-    }
-    else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD &&
-             !(tcpHeader.GetFlags() & TcpHeader::ECE))
-    {
-        m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+        else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD &&
+                 !(tcpHeader.GetFlags() & TcpHeader::ECE))
+        {
+            m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+        }
     }
 
     // Update bytes in flight before processing the ACK for proper calculation of congestion window
