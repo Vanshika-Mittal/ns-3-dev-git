@@ -284,10 +284,13 @@ class TcpSocketAccEcnTester : public TcpSocketBase
     using TcpSocketBase::CheckEcnRvdSyn;
     using TcpSocketBase::CheckEcnRvdSynAck;
     using TcpSocketBase::CheckEcnRvdLastAck;
+    using TcpSocketBase::CheckEcnInIpv4;
+    using TcpSocketBase::CheckEcnInIpv6;
     using TcpSocketBase::IsEct;
     using TcpSocketBase::m_tcb;
     using TcpSocketBase::m_accEcnData;
     using TcpSocketBase::m_state;
+    using TcpSocketBase::m_connected;
     using TcpSocketBase::m_synCount;
     using TcpSocketBase::m_synRetries;
     using TcpSocketBase::ReTxTimeout;
@@ -533,13 +536,13 @@ class TcpAccEcnDecodingTest : public TestCase
         NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCepS.Get(), 5, "Sender initial cep must be 5");
         NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE0bS.Get(), 1, "Sender initial e0b must be 1");
         NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCebS.Get(), 0, "Sender initial ceb must be 0");
-        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE1bS.Get(), 0, "Sender initial e1b must be 0");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE1bS.Get(), 1, "Sender initial e1b must be 1 per RFC 9768");
 
         accData->IniReceiverCounters();
         NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCepR.Get(), 5, "Receiver initial cep must be 5");
         NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE0bR.Get(), 1, "Receiver initial e0b must be 1");
         NS_TEST_ASSERT_MSG_EQ(accData->m_ecnCebR.Get(), 0, "Receiver initial ceb must be 0");
-        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE1bR.Get(), 0, "Receiver initial e1b must be 0");
+        NS_TEST_ASSERT_MSG_EQ(accData->m_ecnE1bR.Get(), 1, "Receiver initial e1b must be 1 per RFC 9768");
 
         // Test ACE delta calculations across modulo-8 wrap-around
         uint8_t DIVACE = 8;
@@ -1055,6 +1058,56 @@ class TcpAccEcnHandshakeValidationTest : public TestCase
             NS_TEST_ASSERT_MSG_EQ(server->GetTcb()->m_isEcnBitFlipped,
                                   true,
                                   "Server must detect mangling when Not-ECT changes to ECT(0)");
+        }
+
+        // 4. Packet and byte accounting rules (RFC 9768 Section 3.2.1 and Section 3.2.2)
+        {
+            Ptr<TcpSocketAccEcnTester> socket = CreateObject<TcpSocketAccEcnTester>();
+            socket->SetNode(node);
+            socket->SetEcnMode(TcpSocketBase::AccEcn);
+            socket->SetState(TcpSocketBase::ESTABLISHED);
+            socket->m_connected = true;
+            socket->GetAccEcnData()->IniReceiverCounters();
+
+            // Initial counter values: r.cep = 5, r.ceb = 0, r.e0b = 1, r.e1b = 1
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCepR.Get(), 5, "Initial r.cep must be 5");
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCebR.Get(), 0, "Initial r.ceb must be 0");
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnE0bR.Get(), 1, "Initial r.e0b must be 1");
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnE1bR.Get(), 1, "Initial r.e1b must be 1");
+
+            // 4a. CE data packet: increments r.cep by 1 and r.ceb by payload octets
+            Ipv4Header ipCe;
+            ipCe.SetEcn(Ipv4Header::ECN_CE);
+            TcpHeader tcpData;
+            socket->CheckEcnInIpv4(ipCe, tcpData, 1000);
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCepR.Get(), 6, "r.cep must increment on CE data");
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCebR.Get(), 1000, "r.ceb must increment by payload size");
+
+            // 4b. Pure ACK with CE (payload = 0): increments r.cep by 1, does NOT increment byte counter
+            TcpHeader tcpAck;
+            tcpAck.SetFlags(TcpHeader::ACK);
+            socket->CheckEcnInIpv4(ipCe, tcpAck, 0);
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCepR.Get(), 7, "r.cep must increment on CE pure ACK");
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCebR.Get(), 1000, "r.ceb must not increment on pure ACK");
+
+            // 4c. ECT(0) data packet: increments r.e0b by payload octets
+            Ipv4Header ipEct0;
+            ipEct0.SetEcn(Ipv4Header::ECN_ECT0);
+            socket->CheckEcnInIpv4(ipEct0, tcpData, 500);
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnE0bR.Get(), 501, "r.e0b must increment by payload size");
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnCepR.Get(), 7, "r.cep must not change on ECT(0)");
+
+            // 4d. ECT(1) data packet: increments r.e1b by payload octets
+            Ipv4Header ipEct1;
+            ipEct1.SetEcn(Ipv4Header::ECN_ECT1);
+            socket->CheckEcnInIpv4(ipEct1, tcpData, 300);
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnE1bR.Get(), 301, "r.e1b must increment by payload size");
+
+            // 4e. IPv6 ECT(0) data packet: increments r.e0b by payload octets
+            Ipv6Header ip6Ect0;
+            ip6Ect0.SetEcn(Ipv6Header::ECN_ECT0);
+            socket->CheckEcnInIpv6(ip6Ect0, tcpData, 200);
+            NS_TEST_ASSERT_MSG_EQ(socket->GetAccEcnData()->m_ecnE0bR.Get(), 701, "r.e0b must increment on IPv6 packet");
         }
     }
 };

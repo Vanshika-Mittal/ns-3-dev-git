@@ -74,10 +74,10 @@ TcpAccEcnData::IniSenderCounters()
     if (!m_isIniS)
     {
         m_isIniS = true;
-        m_ecnCepS = 5; // Initialized to 5 per draft-ietf-tcpm-accurate-ecn Section 3.2.3.1
+        m_ecnCepS = 5; // Initialized to 5 per RFC 9768 Section 3.2.1.
         m_ecnE0bS = 1;
         m_ecnCebS = 0;
-        m_ecnE1bS = 0;
+        m_ecnE1bS = 1; // Initialized to 1 per RFC 9768 Section 3.2.1.
     }
 }
 
@@ -88,10 +88,10 @@ TcpAccEcnData::IniReceiverCounters()
     if (!m_isIniR)
     {
         m_isIniR = true;
-        m_ecnCepR = 5; // Initialized to 5 per draft-ietf-tcpm-accurate-ecn Section 3.2.3.1
+        m_ecnCepR = 5; // Initialized to 5 per RFC 9768 Section 3.2.1.
         m_ecnE0bR = 1;
         m_ecnCebR = 0;
-        m_ecnE1bR = 0;
+        m_ecnE1bR = 1; // Initialized to 1 per RFC 9768 Section 3.2.1.
     }
 }
 

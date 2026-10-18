@@ -22,7 +22,7 @@ namespace ns3
  *
  * @brief Holds sender and receiver Accurate ECN (AccECN) state counters and traces.
  *
- * Implements counter structures and tracking specified in draft-ietf-tcpm-accurate-ecn.
+ * Implements counter structures and tracking specified in RFC 9768.
  */
 class TcpAccEcnData : public Object
 {
