@@ -293,6 +293,9 @@ class TcpSocketAccEcnTester : public TcpSocketBase
     using TcpSocketBase::m_connected;
     using TcpSocketBase::m_synCount;
     using TcpSocketBase::m_synRetries;
+    using TcpSocketBase::DecodeAccEcnData;
+    using TcpSocketBase::DoForwardUp;
+    using TcpSocketBase::m_highRxAckMark;
     using TcpSocketBase::ReTxTimeout;
 
     /**
@@ -565,6 +568,115 @@ class TcpAccEcnDecodingTest : public TestCase
         NS_TEST_ASSERT_MSG_EQ(delta3, 3, "Delta from ace 0 (8) to 3 should be 3");
         sCep += delta3; // sCep = 11
         NS_TEST_ASSERT_MSG_EQ(sCep, 11, "Accumulated cepS must be 11");
+
+        // Test DecodeAccEcnData: ACE decoding on ACK, missing cycles, and option coexistence per RFC 9768
+        {
+            Ptr<TcpSocketAccEcnTester> s = CreateObject<TcpSocketAccEcnTester>();
+            s->SetNode(node);
+            s->SetEcnMode(TcpSocketBase::AccEcn);
+            s->SetState(TcpSocketBase::ESTABLISHED);
+            s->m_connected = true;
+            s->GetAccEcnData()->IniSenderCounters();
+            s->GetTcb()->m_segmentSize = 1000;
+            s->m_highRxAckMark = SequenceNumber32(1000);
+
+            // 1. Normal ACK with ACE = 6 (1 CE mark), 1000 bytes newly acknowledged
+            TcpHeader h1;
+            h1.SetFlags(TcpHeader::ACK | s->SetAceFlags(6));
+            h1.SetAckNumber(SequenceNumber32(2000));
+            h1.SetSequenceNumber(SequenceNumber32(1000));
+            s->DecodeAccEcnData(h1);
+            s->m_highRxAckMark = SequenceNumber32(2000);
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnCepS.Get(),
+                                  6,
+                                  "s.cep must increment from 5 to 6 on ACE = 6");
+
+            // 2. Missing ACE cycles (RFC 9768 Appendix A.2.1)
+            // 10 packets acknowledged (10,000 bytes), ACE wraps by 10 mod 8: (6 + 10) % 8 = 0.
+            TcpHeader h2;
+            h2.SetFlags(TcpHeader::ACK | s->SetAceFlags(0));
+            h2.SetAckNumber(SequenceNumber32(12000));
+            h2.SetSequenceNumber(SequenceNumber32(1000));
+            s->DecodeAccEcnData(h2);
+            s->m_highRxAckMark = SequenceNumber32(12000);
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnCepS.Get(),
+                                  16,
+                                  "s.cep must recover missing ACE cycles to 16");
+
+            // 3. Simultaneous ACE and AccECN Option (RFC 9768 Appendix A.2.2 & Section 3.2.2)
+            // ACK carries ACE = 1 (1 CE packet) and AccECN option with byte counts.
+            // ACE must be decoded into s.cep even when option is present!
+            TcpHeader h3;
+            h3.SetFlags(TcpHeader::ACK | s->SetAceFlags(1));
+            h3.SetAckNumber(SequenceNumber32(13000));
+            h3.SetSequenceNumber(SequenceNumber32(1000));
+            Ptr<TcpOptionAccEcn> opt = CreateObject<TcpOptionAccEcn>();
+            opt->SetE0B(1001);
+            opt->SetCEB(1000);
+            opt->SetE1B(1);
+            h3.AppendOption(opt);
+            s->DecodeAccEcnData(h3);
+            s->m_highRxAckMark = SequenceNumber32(13000);
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnCepS.Get(),
+                                  17,
+                                  "s.cep must be updated from ACE even when AccECN option is present");
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnCebS.Get(),
+                                  1000,
+                                  "s.ceb must be updated from AccECN option");
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnE0bS.Get(),
+                                  1001,
+                                  "s.e0b must be updated from AccECN option");
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnE1bS.Get(),
+                                  1,
+                                  "s.e1b must remain 1");
+
+            // 4. Arithmetic safety when newlyAckedPkt < dCep (pure ACK with CE)
+            TcpHeader h4;
+            h4.SetFlags(TcpHeader::ACK | s->SetAceFlags(2));
+            h4.SetAckNumber(SequenceNumber32(13000));
+            h4.SetSequenceNumber(SequenceNumber32(1000));
+            s->DecodeAccEcnData(h4);
+            NS_TEST_ASSERT_MSG_EQ(s->GetAccEcnData()->m_ecnCepS.Get(),
+                                  18,
+                                  "s.cep must increment safely without unsigned underflow");
+        }
+
+        // Test that AccECN sockets do not alter ECN state upon receiving Classic ECN CWR flags per RFC 9768
+        {
+            Ptr<TcpSocketAccEcnTester> sAcc = CreateObject<TcpSocketAccEcnTester>();
+            sAcc->SetNode(node);
+            sAcc->SetEcnMode(TcpSocketBase::AccEcn);
+            sAcc->SetState(TcpSocketBase::ESTABLISHED);
+            sAcc->m_connected = true;
+            sAcc->GetTcb()->m_ecnState = TcpSocketState::ECN_CE_RCVD;
+
+            TcpHeader cwrH;
+            cwrH.SetFlags(TcpHeader::ACK | TcpHeader::CWR);
+            cwrH.SetSequenceNumber(SequenceNumber32(1000));
+            cwrH.SetAckNumber(SequenceNumber32(1000));
+            Ptr<Packet> pAcc = Create<Packet>();
+            pAcc->AddHeader(cwrH);
+            Address dummyAddr;
+            sAcc->DoForwardUp(pAcc, dummyAddr, dummyAddr);
+            NS_TEST_ASSERT_MSG_EQ(sAcc->GetTcb()->m_ecnState,
+                                  TcpSocketState::ECN_CE_RCVD,
+                                  "AccECN socket must not reset ecnState to ECN_IDLE on CWR flag");
+
+            // Classic ECN socket must transition to ECN_IDLE on CWR flag
+            Ptr<TcpSocketAccEcnTester> sClassic = CreateObject<TcpSocketAccEcnTester>();
+            sClassic->SetNode(node);
+            sClassic->SetEcnMode(TcpSocketBase::ClassicEcn);
+            sClassic->SetState(TcpSocketBase::ESTABLISHED);
+            sClassic->m_connected = true;
+            sClassic->GetTcb()->m_ecnState = TcpSocketState::ECN_SENDING_ECE;
+
+            Ptr<Packet> pClassic = Create<Packet>();
+            pClassic->AddHeader(cwrH);
+            sClassic->DoForwardUp(pClassic, dummyAddr, dummyAddr);
+            NS_TEST_ASSERT_MSG_EQ(sClassic->GetTcb()->m_ecnState,
+                                  TcpSocketState::ECN_IDLE,
+                                  "Classic ECN socket must reset to ECN_IDLE on CWR flag");
+        }
     }
 };
 

@@ -1426,13 +1426,9 @@ TcpSocketBase::DoForwardUp(Ptr<Packet> packet, const Address& fromAddress, const
 
     if (m_state == ESTABLISHED && !(tcpHeader.GetFlags() & TcpHeader::RST))
     {
-        // Check if the sender has responded to ECN echo by reducing the Congestion Window
-        if (tcpHeader.GetFlags() & TcpHeader::CWR)
+        // For Classic ECN, check if sender responded to ECE with CWR per RFC 3168.
+        if (m_ecnMode == EcnMode_t::ClassicEcn && (tcpHeader.GetFlags() & TcpHeader::CWR))
         {
-            // Check if a packet with CE bit set is received. If there is no CE bit set, then change
-            // the state to ECN_IDLE to stop sending ECN Echo messages. If there is CE bit set, the
-            // packet should continue sending ECN Echo messages
-            //
             if (m_tcb->m_ecnState != TcpSocketState::ECN_CE_RCVD)
             {
                 NS_LOG_DEBUG(TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_IDLE");
@@ -3328,7 +3324,9 @@ TcpSocketBase::SendDataPacket(SequenceNumber32 seq, uint32_t maxSize, bool withA
         m_delAckCount = 0;
     }
 
-    if (m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD &&
+    // For Classic ECN, send CWR flag in response to ECE per RFC 3168.
+    if (m_ecnMode == EcnMode_t::ClassicEcn &&
+        m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD &&
         m_ecnEchoSeq.Get() > m_ecnCWRSeq.Get() && !isRetransmission)
     {
         NS_LOG_DEBUG(TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_CWR_SENT");
@@ -3772,8 +3770,10 @@ TcpSocketBase::ReceivedData(Ptr<Packet> p, const TcpHeader& tcpHeader)
     SequenceNumber32 expectedSeq = m_tcb->m_rxBuffer->NextRxSequence();
     if (!m_tcb->m_rxBuffer->Add(p, tcpHeader))
     { // Insert failed: No data or RX buffer full
-        if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
-            m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
+        if ((m_ecnMode == EcnMode_t::ClassicEcn ||
+             m_tcb->m_ecnMode == TcpSocketState::DctcpEcn) &&
+            (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD ||
+             m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE))
         {
             SendEmptyPacket(TcpHeader::ACK | TcpHeader::ECE);
             NS_LOG_DEBUG(TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_SENDING_ECE");
@@ -5141,24 +5141,24 @@ TcpSocketBase::DecodeAccEcnData(const TcpHeader& tcpHeader)
     uint32_t newlyAckedPkt =
         (m_tcb->m_segmentSize > 0) ? (newlyAckedB / m_tcb->m_segmentSize) : 0;
 
+    // Calculate ACE delta per RFC 9768 Section 3.2.2.
     uint32_t cepD = (ace + DIVACE - (m_accEcnData->m_ecnCepS % DIVACE)) % DIVACE;
-    uint32_t cepDsafer = (newlyAckedPkt >= ((newlyAckedPkt - cepD) % DIVACE))
-                             ? (newlyAckedPkt - ((newlyAckedPkt - cepD) % DIVACE))
-                             : cepD;
 
-    if (!hasOptionAccEcn)
+    // Estimate missing ACE cycles per RFC 9768 Appendix A.2.1.
+    uint32_t cepDsafer = cepD;
+    if (newlyAckedPkt >= cepD)
     {
-        if ((newlyAckedB > 0) || (newlyAckedB == 0 && newlyAckedT))
-        {
-            if (newlyAckedPkt < cepD)
-            {
-                cepDsafer = cepD;
-            }
-            m_accEcnData->m_ecnCepS += cepDsafer;
-        }
+        cepDsafer = newlyAckedPkt - ((newlyAckedPkt - cepD) % DIVACE);
+    }
+
+    // Always decode ACE into s.cep when newly acknowledged sequence space or timestamp arrives.
+    if ((newlyAckedB > 0) || (newlyAckedB == 0 && newlyAckedT))
+    {
+        m_accEcnData->m_ecnCepS += cepDsafer;
         NS_LOG_INFO("Decoded AccECN ACE field, s.cep=" << m_accEcnData->m_ecnCepS);
     }
-    else
+
+    if (hasOptionAccEcn)
     {
         Ptr<const TcpOption> option = tcpHeader.GetExperimentalOption(TcpOptionExperimental::ACCECN);
         ProcessOptionAccEcn(option, newlyAckedB);
