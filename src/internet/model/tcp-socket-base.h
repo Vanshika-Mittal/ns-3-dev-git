@@ -1429,8 +1429,9 @@ class TcpSocketBase : public TcpSocket
     /**
      * @brief Check ECN flags on received SYN packet
      * @param tcpHeader The received TCP header
+     * @param isRetransmission Whether this SYN is a retransmission during SYN_RCVD
      */
-    void CheckEcnRvdSyn(const TcpHeader& tcpHeader);
+    void CheckEcnRvdSyn(const TcpHeader& tcpHeader, bool isRetransmission = false);
 
     /**
      * @brief Check ECN flags on received SYN/ACK packet

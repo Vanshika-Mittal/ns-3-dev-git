@@ -2557,10 +2557,10 @@ TcpSocketBase::ProcessSynRcvd(Ptr<Packet> packet,
             NotifySend(GetTxAvailable());
         }
     }
-    else if (tcpflags == TcpHeader::SYN)
+    else if ((tcpflags & TcpHeader::SYN) && !(tcpflags & TcpHeader::ACK))
     { // Probably the peer lost my SYN+ACK
         m_tcb->m_rxBuffer->SetNextRxSequence(tcpHeader.GetSequenceNumber() + SequenceNumber32(1));
-        CheckEcnRvdSyn(tcpHeader);
+        CheckEcnRvdSyn(tcpHeader, true);
     }
     else if (tcpflags == (TcpHeader::FIN | TcpHeader::ACK))
     {
@@ -4035,7 +4035,20 @@ TcpSocketBase::ReTxTimeout()
     if (m_state == SYN_SENT)
     {
         NS_ASSERT(m_synCount > 0);
-        if (m_tcb->m_useEcn == TcpSocketState::On)
+        if (m_ecnMode == EcnMode_t::AccEcn && m_tcb->m_useEcn != TcpSocketState::Off)
+        {
+            if (m_synCount == m_synRetries - 1)
+            {
+                // The first retransmission retries AccECN flags per RFC 9768 Section 3.1.4.1.
+                SendEmptyPacket(TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR | TcpHeader::AE);
+            }
+            else
+            {
+                // Subsequent retransmissions fall back to non-ECN flags with the same ISN.
+                SendEmptyPacket(TcpHeader::SYN);
+            }
+        }
+        else if (m_tcb->m_useEcn == TcpSocketState::On)
         {
             SendEmptyPacket(TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR);
         }
@@ -4994,7 +5007,7 @@ TcpSocketBase::IsEct(TcpPacketType_t packetType) const
 {
     NS_LOG_FUNCTION(this << packetType);
     NS_ASSERT_MSG(packetType != TcpPacketType_t::INVALID, "Invalid TCP packet type");
-    if (m_tcb->m_ecnState == TcpSocketState::ECN_DISABLED)
+    if (m_tcb->m_ecnState == TcpSocketState::ECN_DISABLED || m_tcb->m_isEcnBitFlipped)
     {
         return false;
     }
@@ -5336,9 +5349,9 @@ TcpSocketBase::CheckEcnInIpv6(const Ipv6Header& header,
 }
 
 void
-TcpSocketBase::CheckEcnRvdSyn(const TcpHeader& tcpHeader)
+TcpSocketBase::CheckEcnRvdSyn(const TcpHeader& tcpHeader, bool isRetransmission)
 {
-    NS_LOG_FUNCTION(this << tcpHeader);
+    NS_LOG_FUNCTION(this << tcpHeader << isRetransmission);
     NS_ASSERT((tcpHeader.GetFlags() & TcpHeader::SYN) && !(tcpHeader.GetFlags() & TcpHeader::ACK));
 
     if (m_tcb->m_useEcn == TcpSocketState::Off)
@@ -5348,18 +5361,77 @@ TcpSocketBase::CheckEcnRvdSyn(const TcpHeader& tcpHeader)
         return;
     }
 
+    uint16_t ecnflags =
+        tcpHeader.GetFlags() & (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE);
+
+    // Retransmitted SYNs during SYN_RCVD are handled per RFC 9768 Section 3.1.5.
+    if (isRetransmission)
+    {
+        // Reset the connection with a RST packet if conflicting Classic and AccECN SYNs are
+        // received during the same handshake per RFC 9768 Section 3.1.5.
+        if (m_ecnMode == EcnMode_t::AccEcn && ecnflags == (TcpHeader::CWR | TcpHeader::ECE))
+        {
+            NS_LOG_WARN("Conflicting Classic ECN SYN received in SYN_RCVD while in AccECN mode; sending RST");
+            SendRST();
+            CloseAndNotify();
+            return;
+        }
+        if (m_ecnMode == EcnMode_t::ClassicEcn &&
+            (ecnflags == (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE) ||
+             (ecnflags != 0 && ecnflags != (TcpHeader::CWR | TcpHeader::ECE))))
+        {
+            NS_LOG_WARN("Conflicting AccECN SYN received in SYN_RCVD while in ClassicEcn mode; sending RST");
+            SendRST();
+            CloseAndNotify();
+            return;
+        }
+
+        if (m_ecnMode == EcnMode_t::AccEcn)
+        {
+            if (ecnflags == 0)
+            {
+                // A fallback non-ECN SYN disables outgoing ECT for the rest of the connection.
+                m_tcb->m_isEcnBitFlipped = true;
+                SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK);
+                return;
+            }
+            else
+            {
+                // For a retransmitted AccECN SYN, reflect the IP-ECN field of the latest SYN.
+                if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD)
+                {
+                    SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::CWR | TcpHeader::AE);
+                }
+                else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT0_RCVD)
+                {
+                    SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::AE);
+                }
+                else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT1_RCVD)
+                {
+                    SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::ECE | TcpHeader::CWR);
+                }
+                else
+                {
+                    SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::CWR);
+                }
+                m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+                return;
+            }
+        }
+    }
+
     if (m_ecnMode == EcnMode_t::AccEcn)
     {
-        uint16_t ecnflags =
-            tcpHeader.GetFlags() & (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE);
-        if (ecnflags == (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE))
+        // If flags (AE, CWR, ECE) are set to any combination other than (0, 0, 0) or (0, 1, 1),
+        // the server negotiates AccECN as if (1, 1, 1) per RFC 9768 Section 3.1.3.
+        if (ecnflags == (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE) ||
+            (ecnflags != 0 && ecnflags != (TcpHeader::CWR | TcpHeader::ECE)))
         {
             NS_LOG_INFO("Received Accurate ECN SYN packet.");
             m_accEcnData->IniReceiverCounters();
 
             if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD)
             {
-                m_accEcnData->m_ecnCepR += 1;
                 SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::CWR | TcpHeader::AE);
             }
             else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECT0_RCVD)
@@ -5432,8 +5504,9 @@ TcpSocketBase::CheckEcnRvdSynAck(const TcpHeader& tcpHeader)
         uint16_t ecnflags =
             tcpHeader.GetFlags() & (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE);
 
-        if (ecnflags == TcpHeader::ECE || ecnflags == (TcpHeader::ECE | TcpHeader::AE))
+        if (ecnflags == TcpHeader::ECE)
         {
+            // Only (AE, CWR, ECE) = (0, 0, 1) negotiates Classic ECN per RFC 9768 Table 2.
             NS_LOG_DEBUG(EcnModeName[m_ecnMode] << " -> ClassicEcn");
             m_ecnMode = EcnMode_t::ClassicEcn;
             m_tcb->m_ecnMode = TcpSocketState::ClassicEcn;
@@ -5441,21 +5514,33 @@ TcpSocketBase::CheckEcnRvdSynAck(const TcpHeader& tcpHeader)
         else if (ecnflags == 0 ||
                  ecnflags == (TcpHeader::CWR | TcpHeader::ECE | TcpHeader::AE))
         {
+            // Flag combination (0, 0, 0) or broken server reflection (1, 1, 1) disables ECN.
             NS_LOG_DEBUG(EcnModeName[m_ecnMode] << " -> NoEcn");
             m_ecnMode = EcnMode_t::NoEcn;
         }
         else
         {
+            // AccECN negotiation confirmed per RFC 9768 Table 2.
+            // Valid feedback flags: (0, 1, 0) Not-ECT, (0, 1, 1) ECT(1), (1, 0, 0) ECT(0),
+            // (1, 1, 0) CE, and (1, 0, 1) reserved for forward compatibility (Section 3.1.3).
             m_accEcnData->IniSenderCounters();
             m_accEcnData->IniReceiverCounters();
 
-            if (ecnflags == TcpHeader::CWR || ecnflags == (TcpHeader::CWR | TcpHeader::ECE))
+            bool sentEctOnSyn = IsEct(TcpPacketType_t::SYN);
+            if (!sentEctOnSyn &&
+                (ecnflags == (TcpHeader::CWR | TcpHeader::ECE) || ecnflags == TcpHeader::AE))
             {
+                // An invalid transition from Not-ECT to ECT indicates mangling per Section 3.2.2.3.
+                m_tcb->m_isEcnBitFlipped = true;
+            }
+            else if (sentEctOnSyn && ecnflags == TcpHeader::CWR)
+            {
+                // An invalid transition from ECT to Not-ECT indicates mangling per Section 3.2.2.3.
                 m_tcb->m_isEcnBitFlipped = true;
             }
             else if (ecnflags == (TcpHeader::CWR | TcpHeader::AE))
             {
-                m_accEcnData->m_ecnCepS += 1;
+                // CE on SYN feedback triggers a congestion response setting IW to 1 SMSS per Section 3.2.2.2.
                 NS_LOG_DEBUG("SET IW to 1 SMSS");
                 m_tcb->m_cWnd = 1 * m_tcb->m_segmentSize;
                 m_tcb->m_cWndInfl = m_tcb->m_cWnd;
@@ -5463,7 +5548,10 @@ TcpSocketBase::CheckEcnRvdSynAck(const TcpHeader& tcpHeader)
 
             if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD)
             {
-                m_accEcnData->m_ecnCepR += 1;
+                if (m_accEcnData->m_ecnCepR.Get() == 5)
+                {
+                    m_accEcnData->m_ecnCepR += 1;
+                }
                 uint16_t flags = SetAceFlags(0b110);
                 SendEmptyPacket(TcpHeader::ACK | flags);
             }
@@ -5523,13 +5611,32 @@ TcpSocketBase::CheckEcnRvdLastAck(const TcpHeader& tcpHeader)
         uint8_t ace = GetAceFlags(tcpHeader.GetFlags());
         if (ace == 0b110)
         {
-            m_accEcnData->m_ecnCepS += 1;
+            if (m_accEcnData->m_ecnCepS.Get() == 5)
+            {
+                m_accEcnData->m_ecnCepS += 1;
+            }
             m_tcb->m_cWnd = 1 * m_tcb->m_segmentSize;
             m_tcb->m_cWndInfl = m_tcb->m_cWnd;
         }
-        else if (ace == 0b010 || ace == 0b011)
+        else if (ace == 0b000)
         {
+            // Table 4 Note 1 specifies that ACE = 0b000 disables outgoing ECT.
             m_tcb->m_isEcnBitFlipped = true;
+        }
+        else
+        {
+            // Check for mangling per RFC 9768 Section 3.2.2.3 and Table 4.
+            bool sentEctOnSynAck = IsEct(TcpPacketType_t::SYN_ACK);
+            if (sentEctOnSynAck && ace == 0b010)
+            {
+                // An invalid transition from ECT to Not-ECT indicates mangling.
+                m_tcb->m_isEcnBitFlipped = true;
+            }
+            else if (!sentEctOnSynAck && (ace == 0b011 || ace == 0b100))
+            {
+                // An invalid transition from Not-ECT to ECT indicates mangling.
+                m_tcb->m_isEcnBitFlipped = true;
+            }
         }
 
         if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD)
