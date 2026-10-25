@@ -1428,9 +1428,10 @@ AccEcn TCP Option
 ^^^^^^^^^^^^^^^^^
 
 The AccECN mechanism uses a TCP option to transmit more accurate and comprehensive
-ECN feedback. ``ns3::TcpOptionAccEcn`` is implemented as a subclass of ``ns3::TcpOptionExperimental``
-and carries the ECT(0), CE, and ECT(1) byte counters (``r.e0b``, ``r.ceb``, ``r.e1b``) as 3-byte fields.
-This uses the experimental option kind (254) with ExID 0xACCE.
+ECN feedback. RFC 9768 defines two dedicated standard option kinds: ``ns3::TcpOptionAccEcn0``
+(Kind 172, Order 0) and ``ns3::TcpOptionAccEcn1`` (Kind 174, Order 1), both derived from
+``ns3::TcpOptionAccEcn``. They carry the ECT(0), CE, and ECT(1) byte counters (``r.e0b``,
+``r.ceb``, ``r.e1b``) as 24-bit big-endian fields in lengths of 11, 8, 5, or 2 bytes.
 
 AccEcn compliance
 ^^^^^^^^^^^^^^^^^
