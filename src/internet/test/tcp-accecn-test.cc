@@ -20,6 +20,7 @@
 #include "ns3/tcp-accecn-data.h"
 #include "ns3/tcp-header.h"
 #include "ns3/tcp-option-accecn.h"
+#include "ns3/tcp-option-ts.h"
 #include "ns3/tcp-l4-protocol.h"
 #include "ns3/tcp-rx-buffer.h"
 #include "ns3/tcp-socket-base.h"
@@ -31,8 +32,8 @@ namespace ns3
 NS_LOG_COMPONENT_DEFINE("TcpAccEcnTestSuite");
 
 /**
- * \ingroup internet-test
- * \brief Socket that allows injecting custom IP TOS / ECN marks on packets.
+ * @ingroup internet-test
+ * @brief Socket that allows injecting custom IP TOS / ECN marks on packets.
  */
 class TcpSocketAccEcnCustom : public TcpSocketMsgBase
 {
@@ -190,8 +191,7 @@ class TcpSocketAccEcnCustom : public TcpSocketMsgBase
         bool hasSyn = flags & TcpHeader::SYN;
         bool hasAck = flags & TcpHeader::ACK;
         bool addAccEcnOption =
-            (hasSyn && hasAck) || (!hasSyn && hasAck && !m_connected) ||
-            !m_accEcnData->m_useDelAckAccEcn;
+            (hasSyn && hasAck) || !m_accEcnData->m_useDelAckAccEcn;
         if (m_ecnMode == EcnMode_t::AccEcn && addAccEcnOption)
         {
             AddOptionAccEcn(header);
@@ -297,6 +297,8 @@ class TcpSocketAccEcnTester : public TcpSocketBase
     using TcpSocketBase::DoForwardUp;
     using TcpSocketBase::m_highRxAckMark;
     using TcpSocketBase::ReTxTimeout;
+    using TcpSocketBase::m_sackEnabled;
+    using TcpSocketBase::AddOptionAccEcn;
 
     /**
      * @brief Set the TCP state machine state.
@@ -350,8 +352,8 @@ class TcpSocketAccEcnTester : public TcpSocketBase
 NS_OBJECT_ENSURE_REGISTERED(TcpSocketAccEcnTester);
 
 /**
- * \ingroup internet-test
- * \brief Test 1-3: Accurate ECN 3WHS negotiation and fallback.
+ * @ingroup internet-test
+ * @brief Test 1-3: Accurate ECN 3WHS negotiation and fallback.
  */
 class TcpAccEcnNegotiationTest : public TcpGeneralTest
 {
@@ -423,8 +425,8 @@ class TcpAccEcnNegotiationTest : public TcpGeneralTest
 };
 
 /**
- * \ingroup internet-test
- * \brief Test 4-6: Accurate ECN Handshake with CE markings on SYN / SYN-ACK.
+ * @ingroup internet-test
+ * @brief Test 4-6: Accurate ECN Handshake with CE markings on SYN / SYN-ACK.
  */
 class TcpAccEcnHandshakeCeTest : public TcpGeneralTest
 {
@@ -501,8 +503,8 @@ class TcpAccEcnHandshakeCeTest : public TcpGeneralTest
 };
 
 /**
- * \ingroup internet-test
- * \brief Test 7-9: Unit test for Accurate ECN ACE encoding, decoding, and data counters.
+ * @ingroup internet-test
+ * @brief Test 7-9: Unit test for Accurate ECN ACE encoding, decoding, and data counters.
  */
 class TcpAccEcnDecodingTest : public TestCase
 {
@@ -610,7 +612,7 @@ class TcpAccEcnDecodingTest : public TestCase
             h3.SetFlags(TcpHeader::ACK | s->SetAceFlags(1));
             h3.SetAckNumber(SequenceNumber32(13000));
             h3.SetSequenceNumber(SequenceNumber32(1000));
-            Ptr<TcpOptionAccEcn> opt = CreateObject<TcpOptionAccEcn>();
+            Ptr<TcpOptionAccEcn0> opt = CreateObject<TcpOptionAccEcn0>();
             opt->SetE0B(1001);
             opt->SetCEB(1000);
             opt->SetE1B(1);
@@ -681,8 +683,8 @@ class TcpAccEcnDecodingTest : public TestCase
 };
 
 /**
- * \ingroup internet-test
- * \brief Test: Full AccECN Data Transfer Test.
+ * @ingroup internet-test
+ * @brief Test: Full AccECN Data Transfer Test.
  */
 class TcpAccEcnTransferTest : public TcpGeneralTest
 {
@@ -1225,8 +1227,304 @@ class TcpAccEcnHandshakeValidationTest : public TestCase
 };
 
 /**
- * \ingroup internet-test
- * \brief TestSuite for Accurate ECN (AccECN).
+ * @ingroup internet-test
+ * @brief Unit test for AccECN TCP Options (RFC 9768).
+ */
+class TcpAccEcnOptionTest : public TestCase
+{
+  public:
+    TcpAccEcnOptionTest()
+        : TestCase("AccECN Options: Serialization, Deserialization, Truncation & Boundaries")
+    {
+    }
+
+  private:
+    void DoRun() override
+    {
+        TestStandardLengths();
+        TestBoundaryCounters();
+        TestArbitraryLengths();
+        TestOptionSpaceAndSackCoexistence();
+    }
+
+    void TestStandardLengths()
+    {
+        // Test AccECN0 (Order 0)
+        {
+            // 11 Bytes: EE0B, ECEB, EE1B
+            TcpOptionAccEcn0 opt0;
+            opt0.SetLength(11);
+            opt0.SetE0B(100);
+            opt0.SetCEB(200);
+            opt0.SetE1B(300);
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE0B(), true, "AccECN0 11B must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasCEB(), true, "AccECN0 11B must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE1B(), true, "AccECN0 11B must have E1B");
+
+            Buffer b;
+            b.AddAtStart(opt0.GetSerializedSize());
+            opt0.Serialize(b.Begin());
+
+            TcpOptionAccEcn0 rx0;
+            uint32_t readLen = rx0.Deserialize(b.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 11, "AccECN0 11B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx0.GetE0B(), 100, "AccECN0 11B E0B mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx0.GetCEB(), 200, "AccECN0 11B CEB mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx0.GetE1B(), 300, "AccECN0 11B E1B mismatch");
+
+            // 8 Bytes: EE0B, ECEB
+            opt0.SetLength(8);
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE0B(), true, "AccECN0 8B must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasCEB(), true, "AccECN0 8B must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE1B(), false, "AccECN0 8B must not have E1B");
+
+            Buffer b8;
+            b8.AddAtStart(opt0.GetSerializedSize());
+            opt0.Serialize(b8.Begin());
+
+            TcpOptionAccEcn0 rx8;
+            readLen = rx8.Deserialize(b8.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 8, "AccECN0 8B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx8.HasE0B(), true, "AccECN0 8B rx must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx8.HasCEB(), true, "AccECN0 8B rx must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx8.HasE1B(), false, "AccECN0 8B rx must not have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx8.GetE0B(), 100, "AccECN0 8B E0B mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx8.GetCEB(), 200, "AccECN0 8B CEB mismatch");
+
+            // 5 Bytes: EE0B
+            opt0.SetLength(5);
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE0B(), true, "AccECN0 5B must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasCEB(), false, "AccECN0 5B must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE1B(), false, "AccECN0 5B must not have E1B");
+
+            Buffer b5;
+            b5.AddAtStart(opt0.GetSerializedSize());
+            opt0.Serialize(b5.Begin());
+
+            TcpOptionAccEcn0 rx5;
+            readLen = rx5.Deserialize(b5.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 5, "AccECN0 5B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx5.HasE0B(), true, "AccECN0 5B rx must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx5.HasCEB(), false, "AccECN0 5B rx must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx5.HasE1B(), false, "AccECN0 5B rx must not have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx5.GetE0B(), 100, "AccECN0 5B E0B mismatch");
+
+            // 2 Bytes: Empty
+            opt0.SetLength(2);
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE0B(), false, "AccECN0 2B must not have E0B");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasCEB(), false, "AccECN0 2B must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt0.HasE1B(), false, "AccECN0 2B must not have E1B");
+
+            Buffer b2;
+            b2.AddAtStart(opt0.GetSerializedSize());
+            opt0.Serialize(b2.Begin());
+
+            TcpOptionAccEcn0 rx2;
+            readLen = rx2.Deserialize(b2.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 2, "AccECN0 2B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx2.HasE0B(), false, "AccECN0 2B rx must not have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx2.HasCEB(), false, "AccECN0 2B rx must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx2.HasE1B(), false, "AccECN0 2B rx must not have E1B");
+        }
+
+        // Test AccECN1 (Order 1)
+        {
+            // 11 Bytes: EE1B, ECEB, EE0B
+            TcpOptionAccEcn1 opt1;
+            opt1.SetLength(11);
+            opt1.SetE1B(300);
+            opt1.SetCEB(200);
+            opt1.SetE0B(100);
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE0B(), true, "AccECN1 11B must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasCEB(), true, "AccECN1 11B must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE1B(), true, "AccECN1 11B must have E1B");
+
+            Buffer b;
+            b.AddAtStart(opt1.GetSerializedSize());
+            opt1.Serialize(b.Begin());
+
+            TcpOptionAccEcn1 rx1;
+            uint32_t readLen = rx1.Deserialize(b.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 11, "AccECN1 11B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx1.GetE0B(), 100, "AccECN1 11B E0B mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx1.GetCEB(), 200, "AccECN1 11B CEB mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx1.GetE1B(), 300, "AccECN1 11B E1B mismatch");
+
+            // 8 Bytes: EE1B, ECEB
+            opt1.SetLength(8);
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE1B(), true, "AccECN1 8B must have E1B");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasCEB(), true, "AccECN1 8B must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE0B(), false, "AccECN1 8B must not have E0B");
+
+            Buffer b8;
+            b8.AddAtStart(opt1.GetSerializedSize());
+            opt1.Serialize(b8.Begin());
+
+            TcpOptionAccEcn1 rx8;
+            readLen = rx8.Deserialize(b8.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 8, "AccECN1 8B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx8.HasE1B(), true, "AccECN1 8B rx must have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx8.HasCEB(), true, "AccECN1 8B rx must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx8.HasE0B(), false, "AccECN1 8B rx must not have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx8.GetE1B(), 300, "AccECN1 8B E1B mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx8.GetCEB(), 200, "AccECN1 8B CEB mismatch");
+
+            // 5 Bytes: EE1B
+            opt1.SetLength(5);
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE1B(), true, "AccECN1 5B must have E1B");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasCEB(), false, "AccECN1 5B must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE0B(), false, "AccECN1 5B must not have E0B");
+
+            Buffer b5;
+            b5.AddAtStart(opt1.GetSerializedSize());
+            opt1.Serialize(b5.Begin());
+
+            TcpOptionAccEcn1 rx5;
+            readLen = rx5.Deserialize(b5.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 5, "AccECN1 5B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx5.HasE1B(), true, "AccECN1 5B rx must have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx5.HasCEB(), false, "AccECN1 5B rx must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx5.HasE0B(), false, "AccECN1 5B rx must not have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx5.GetE1B(), 300, "AccECN1 5B E1B mismatch");
+
+            // 2 Bytes: Empty
+            opt1.SetLength(2);
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE1B(), false, "AccECN1 2B must not have E1B");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasCEB(), false, "AccECN1 2B must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt1.HasE0B(), false, "AccECN1 2B must not have E0B");
+
+            Buffer b2;
+            b2.AddAtStart(opt1.GetSerializedSize());
+            opt1.Serialize(b2.Begin());
+
+            TcpOptionAccEcn1 rx2;
+            readLen = rx2.Deserialize(b2.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 2, "AccECN1 2B read length mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx2.HasE1B(), false, "AccECN1 2B rx must not have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx2.HasCEB(), false, "AccECN1 2B rx must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx2.HasE0B(), false, "AccECN1 2B rx must not have E0B");
+        }
+    }
+
+    void TestBoundaryCounters()
+    {
+        std::vector<uint32_t> boundaries = {0, 1, 0xFFFF, 0xFFFFFF, 0x1000000};
+
+        for (uint32_t val : boundaries)
+        {
+            TcpOptionAccEcn0 opt;
+            opt.SetLength(11);
+            opt.SetE0B(val);
+            opt.SetCEB(val);
+            opt.SetE1B(val);
+
+            uint32_t expected24 = val & 0xFFFFFF;
+            NS_TEST_ASSERT_MSG_EQ(opt.GetE0B(), expected24, "Boundary counter set failed for E0B");
+            NS_TEST_ASSERT_MSG_EQ(opt.GetCEB(), expected24, "Boundary counter set failed for CEB");
+            NS_TEST_ASSERT_MSG_EQ(opt.GetE1B(), expected24, "Boundary counter set failed for E1B");
+
+            Buffer b;
+            b.AddAtStart(opt.GetSerializedSize());
+            opt.Serialize(b.Begin());
+
+            TcpOptionAccEcn0 rx;
+            rx.Deserialize(b.Begin());
+
+            NS_TEST_ASSERT_MSG_EQ(rx.GetE0B(), expected24, "Boundary deserialization failed for E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx.GetCEB(), expected24, "Boundary deserialization failed for CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx.GetE1B(), expected24, "Boundary deserialization failed for E1B");
+        }
+    }
+
+    void TestArbitraryLengths()
+    {
+        // RFC 9768 Section 3.2.3: "if the AccECN Option is of any other length,
+        // implementations MUST use those whole 3-octet fields that fit within
+        // the length and ignore the remainder of the option, treating it as padding."
+
+        // Test length 14 (3 whole 3-octet fields + 3 padding bytes)
+        {
+            TcpOptionAccEcn0 opt;
+            opt.SetLength(14);
+            opt.SetE0B(0x123456);
+            opt.SetCEB(0x654321);
+            opt.SetE1B(0x112233);
+
+            Buffer b;
+            b.AddAtStart(14);
+            opt.Serialize(b.Begin());
+
+            TcpOptionAccEcn0 rx;
+            uint32_t readLen = rx.Deserialize(b.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 14, "Length 14 must return 14 bytes read");
+            NS_TEST_ASSERT_MSG_EQ(rx.HasE0B(), true, "Length 14 must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx.HasCEB(), true, "Length 14 must have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx.HasE1B(), true, "Length 14 must have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx.GetE0B(), 0x123456, "Length 14 E0B mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx.GetCEB(), 0x654321, "Length 14 CEB mismatch");
+            NS_TEST_ASSERT_MSG_EQ(rx.GetE1B(), 0x112233, "Length 14 E1B mismatch");
+        }
+
+        // Test length 7 (1 whole 3-octet field + 2 padding bytes)
+        {
+            TcpOptionAccEcn0 opt;
+            opt.SetLength(7);
+            opt.SetE0B(0xABCDEF);
+
+            Buffer b;
+            b.AddAtStart(7);
+            opt.Serialize(b.Begin());
+
+            TcpOptionAccEcn0 rx;
+            uint32_t readLen = rx.Deserialize(b.Begin());
+            NS_TEST_ASSERT_MSG_EQ(readLen, 7, "Length 7 must return 7 bytes read");
+            NS_TEST_ASSERT_MSG_EQ(rx.HasE0B(), true, "Length 7 must have E0B");
+            NS_TEST_ASSERT_MSG_EQ(rx.HasCEB(), false, "Length 7 must not have CEB");
+            NS_TEST_ASSERT_MSG_EQ(rx.HasE1B(), false, "Length 7 must not have E1B");
+            NS_TEST_ASSERT_MSG_EQ(rx.GetE0B(), 0xABCDEF, "Length 7 E0B mismatch");
+        }
+    }
+
+    void TestOptionSpaceAndSackCoexistence()
+    {
+        Ptr<TcpSocketAccEcnTester> s = CreateObject<TcpSocketAccEcnTester>();
+        s->SetEcnMode(TcpSocketBase::AccEcn);
+        s->m_connected = true;
+
+        // When space is sufficient, AccECN option is added
+        TcpHeader h1;
+        h1.SetFlags(TcpHeader::ACK);
+        s->AddOptionAccEcn(h1);
+        NS_TEST_ASSERT_MSG_EQ(h1.HasOption(TcpOption::ACCECN0) || h1.HasOption(TcpOption::ACCECN1),
+                              true,
+                              "AccECN option must be added when space is available");
+
+        // When space is constrained (e.g. SACK requires 18 bytes and current options leave < 5 bytes for AccECN)
+        TcpHeader h2;
+        h2.SetFlags(TcpHeader::ACK);
+        s->m_sackEnabled = true;
+        TcpHeader dataH;
+        dataH.SetSequenceNumber(SequenceNumber32(2000));
+        s->m_tcb->m_rxBuffer->Add(Create<Packet>(1000), dataH);
+
+        // Fill header options up to 20 bytes: 40 - 20 = 20B left. With 18B reserved for SACK,
+        // avail space for AccECN = 20 - 18 = 2 < 5.
+        // AccECN option must be omitted to give precedence to SACK!
+        Ptr<TcpOptionTS> ts = CreateObject<TcpOptionTS>();
+        h2.AppendOption(ts); // 10 bytes
+        Ptr<TcpOptionTS> ts2 = CreateObject<TcpOptionTS>();
+        h2.AppendOption(ts2); // another 10 bytes -> total 20 bytes options
+
+        s->AddOptionAccEcn(h2);
+        NS_TEST_ASSERT_MSG_EQ(h2.HasOption(TcpOption::ACCECN0),
+                              false,
+                              "AccECN option must be omitted when SACK loss feedback takes precedence");
+    }
+};
+
+/**
+ * @ingroup internet-test
+ * @brief TestSuite for Accurate ECN (AccECN).
  */
 class TcpAccEcnTestSuite : public TestSuite
 {
@@ -1294,6 +1592,9 @@ class TcpAccEcnTestSuite : public TestSuite
 
         // 13. Detailed Handshake and Counter Validation (RFC 9768 Section 3.1 and Tables 2/3/4)
         AddTestCase(new TcpAccEcnHandshakeValidationTest(), TestCase::Duration::QUICK);
+
+        // 14. Option serialization, deserialization, truncation, boundaries & SACK coexistence (RFC 9768 Section 3.2.3)
+        AddTestCase(new TcpAccEcnOptionTest(), TestCase::Duration::QUICK);
     }
 };
 
