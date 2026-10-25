@@ -60,6 +60,8 @@ TcpOption::CreateOption(uint8_t kind)
         {TcpOption::WINSCALE, TcpOptionWinScale::GetTypeId()},
         {TcpOption::SACKPERMITTED, TcpOptionSackPermitted::GetTypeId()},
         {TcpOption::SACK, TcpOptionSack::GetTypeId()},
+        {TcpOption::ACCECN0, TcpOptionAccEcn0::GetTypeId()},
+        {TcpOption::ACCECN1, TcpOptionAccEcn1::GetTypeId()},
         {TcpOption::UNKNOWN, TcpOptionUnknown::GetTypeId()},
     };
 
@@ -87,6 +89,8 @@ TcpOption::IsKindKnown(uint8_t kind)
     case SACKPERMITTED:
     case SACK:
     case TS:
+    case ACCECN0:
+    case ACCECN1:
     case EXPERIMENTAL:
         // Do not add UNKNOWN here
         return true;
@@ -200,36 +204,12 @@ TcpOptionExperimental::GetKind() const
 bool
 TcpOptionExperimental::IsExIDKnown(uint16_t magicNumber)
 {
-    switch (magicNumber)
-    {
-    case ACCECN:
-        return true;
-    }
     return false;
 }
 
 Ptr<TcpOption>
 TcpOptionExperimental::CreateOptionExperimental(uint16_t exid)
 {
-    struct ExidToTid
-    {
-        TcpOptionExperimental::ExID exid;
-        TypeId tid;
-    };
-
-    static ObjectFactory objectFactory;
-    static ExidToTid toTid[] = {
-        {TcpOptionExperimental::ACCECN, TcpOptionAccEcn::GetTypeId()},
-    };
-
-    for (unsigned int i = 0; i < sizeof(toTid) / sizeof(ExidToTid); ++i)
-    {
-        if (toTid[i].exid == exid)
-        {
-            objectFactory.SetTypeId(toTid[i].tid);
-            return objectFactory.Create<TcpOption>();
-        }
-    }
     return CreateObject<TcpOptionUnknown>();
 }
 

@@ -49,6 +49,8 @@ class TcpOption : public Object
         SACKPERMITTED = 4,  //!< SACKPERMITTED
         SACK = 5,           //!< SACK
         TS = 8,             //!< TS
+        ACCECN0 = 172,      //!< AccECN Order 0 (RFC 9768)
+        ACCECN1 = 174,      //!< AccECN Order 1 (RFC 9768)
         EXPERIMENTAL = 254, //!< EXPERIMENTAL
         UNKNOWN = 255       //!< not a standardized value; for unknown recv'd options
     };
@@ -134,9 +136,9 @@ class TcpOptionUnknown : public TcpOption
 };
 
 /**
- * \ingroup tcp
+ * @ingroup tcp
  *
- * \brief Base class for all kinds of TCP experimental options
+ * @brief Base class for all kinds of TCP experimental options
  *
  * Before an TCP option has its own kind,
  * it can use kind = EXPERIMENTAL (as in \RFC{6994})
@@ -151,12 +153,12 @@ public:
     enum ExID
     { // the magic number for Experimental option
       // the magic number forms the first two bytes in option content field to differentiate experimental options
-      ACCECN = 0xACCE,  //!< AccEcn Option
+      UNKNOWN = 0,
     };
 
     /**
-     * \brief Get the type ID.
-     * \return the object TypeId
+     * @brief Get the type ID.
+     * @return the object TypeId
      */
     static TypeId GetTypeId();
     uint8_t GetKind() const override;

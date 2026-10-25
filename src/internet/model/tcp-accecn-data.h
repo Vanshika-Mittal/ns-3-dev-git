@@ -66,6 +66,7 @@ class TcpAccEcnData : public Object
     TracedValue<uint32_t> m_ecnE1bR{0}; ///< Receiver ECT(1) payload byte counter
 
     bool m_useDelAckAccEcn{true}; ///< Flag for change-triggered delayed ACKs
+    bool m_firstDataAccEcnSent{false}; ///< Whether initial data packet AccECN option has been sent
 
   private:
     bool m_isIniS{false}; ///< Whether sender counters have been initialized

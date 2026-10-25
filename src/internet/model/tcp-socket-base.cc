@@ -2945,8 +2945,7 @@ TcpSocketBase::SendEmptyPacket(uint16_t flags)
     bool hasAck = flags & TcpHeader::ACK;
     bool isAck = flags == TcpHeader::ACK;
 
-    bool addAccEcnOption =
-        (hasSyn && hasAck) || (!hasSyn && hasAck && !m_connected) || !m_accEcnData->m_useDelAckAccEcn;
+    bool addAccEcnOption = (hasSyn && hasAck) || !m_accEcnData->m_useDelAckAccEcn;
     if (m_ecnMode == EcnMode_t::AccEcn && addAccEcnOption)
     {
         AddOptionAccEcn(header);
@@ -3395,10 +3394,11 @@ TcpSocketBase::SendDataPacket(SequenceNumber32 seq, uint32_t maxSize, bool withA
         m_retxEvent = Simulator::Schedule(m_rto, &TcpSocketBase::ReTxTimeout, this);
     }
 
-    if ((!m_accEcnData->m_useDelAckAccEcn || seq == SequenceNumber32(1)) &&
+    if ((!m_accEcnData->m_useDelAckAccEcn || !m_accEcnData->m_firstDataAccEcnSent) &&
         m_ecnMode == EcnMode_t::AccEcn)
     {
         AddOptionAccEcn(header);
+        m_accEcnData->m_firstDataAccEcnSent = true;
         m_accEcnData->m_useDelAckAccEcn = true;
     }
 
@@ -5117,9 +5117,11 @@ TcpSocketBase::DecodeAccEcnData(const TcpHeader& tcpHeader)
     NS_ASSERT(m_ecnMode == EcnMode_t::AccEcn);
 
     bool hasOptionTS = tcpHeader.HasOption(TcpOption::TS);
-    bool hasOptionAccEcn = tcpHeader.HasExperimentalOption(TcpOptionExperimental::ACCECN);
+    bool hasOptionAccEcn =
+        tcpHeader.HasOption(TcpOption::ACCECN0) || tcpHeader.HasOption(TcpOption::ACCECN1);
 
-    uint32_t newlyAckedB = tcpHeader.GetAckNumber() - m_highRxAckMark;
+    int64_t ackDiff = tcpHeader.GetAckNumber() - m_highRxAckMark;
+    uint32_t newlyAckedB = (ackDiff > 0) ? static_cast<uint32_t>(ackDiff) : 0;
 
     bool newlyAckedT = true;
     if (hasOptionTS)
@@ -5160,7 +5162,9 @@ TcpSocketBase::DecodeAccEcnData(const TcpHeader& tcpHeader)
 
     if (hasOptionAccEcn)
     {
-        Ptr<const TcpOption> option = tcpHeader.GetExperimentalOption(TcpOptionExperimental::ACCECN);
+        Ptr<const TcpOption> option = tcpHeader.HasOption(TcpOption::ACCECN0)
+                                          ? tcpHeader.GetOption(TcpOption::ACCECN0)
+                                          : tcpHeader.GetOption(TcpOption::ACCECN1);
         ProcessOptionAccEcn(option, newlyAckedB);
     }
 }
@@ -5172,16 +5176,94 @@ TcpSocketBase::AddOptionAccEcn(TcpHeader& header)
     bool isSyn = (header.GetFlags() & TcpHeader::SYN) && !(header.GetFlags() & TcpHeader::ACK);
     NS_ASSERT(!isSyn);
 
-    Ptr<TcpOptionAccEcn> option = CreateObject<TcpOptionAccEcn>();
-    uint32_t DIVOPT = 2 << 23;
-    option->SetE0B(m_accEcnData->m_ecnE0bR % DIVOPT);
-    option->SetCEB(m_accEcnData->m_ecnCebR % DIVOPT);
-    option->SetE1B(m_accEcnData->m_ecnE1bR % DIVOPT);
-    header.AppendOption(option);
+    // Check available option space
+    uint8_t currentOptLength = header.GetOptionLength();
+    uint8_t maxOptLength = header.GetMaxOptionLength();
+    int availSpace = maxOptLength - currentOptLength;
 
-    NS_LOG_INFO(m_node->GetId() << " Add option AccEcn, r.e0b=" << m_accEcnData->m_ecnE0bR % DIVOPT
-                                << " r.ceb=" << m_accEcnData->m_ecnCebR % DIVOPT
-                                << " r.e1b=" << m_accEcnData->m_ecnE1bR % DIVOPT);
+    // SACK loss feedback (18B for 2 blocks) takes precedence over AccECN options (RFC 9768 Section 3.2.3.3)
+    if (m_sackEnabled && m_tcb->m_rxBuffer->GetSackListSize() > 0)
+    {
+        availSpace -= 18;
+    }
+
+    if (availSpace < 5)
+    {
+        // Not enough space to include an AccECN option with counter data;
+        // omit option entirely (ACE header continues providing CE feedback)
+        return;
+    }
+
+    uint32_t DIVOPT = 1 << 24;
+    uint32_t e0b = m_accEcnData->m_ecnE0bR % DIVOPT;
+    uint32_t ceb = m_accEcnData->m_ecnCebR % DIVOPT;
+    uint32_t e1b = m_accEcnData->m_ecnE1bR % DIVOPT;
+
+    bool e0bChanged = (m_accEcnData->m_ecnE0bR != 1);
+    bool cebChanged = (m_accEcnData->m_ecnCebR != 0);
+    bool e1bChanged = (m_accEcnData->m_ecnE1bR != 1);
+
+    // Decide whether to use Order 0 (AccECN0) or Order 1 (AccECN1)
+    bool useOrder1 = e1bChanged && !e0bChanged;
+
+    if (useOrder1)
+    {
+        Ptr<TcpOptionAccEcn1> option = CreateObject<TcpOptionAccEcn1>();
+        option->SetE0B(e0b);
+        option->SetCEB(ceb);
+        option->SetE1B(e1b);
+
+        if (availSpace >= 11)
+        {
+            option->SetLength(11);
+        }
+        else if (availSpace >= 8)
+        {
+            option->SetLength(8);
+        }
+        else if (availSpace >= 5 && !cebChanged)
+        {
+            option->SetLength(5);
+        }
+        else
+        {
+            // Cannot fit changed counters
+            return;
+        }
+        header.AppendOption(option);
+        NS_LOG_INFO(m_node->GetId() << " Add option AccEcn1 (len "
+                                    << static_cast<int>(option->GetLength())
+                                    << "), r.e0b=" << e0b << " r.ceb=" << ceb << " r.e1b=" << e1b);
+    }
+    else
+    {
+        Ptr<TcpOptionAccEcn0> option = CreateObject<TcpOptionAccEcn0>();
+        option->SetE0B(e0b);
+        option->SetCEB(ceb);
+        option->SetE1B(e1b);
+
+        if (availSpace >= 11)
+        {
+            option->SetLength(11);
+        }
+        else if (availSpace >= 8 && !e1bChanged)
+        {
+            option->SetLength(8);
+        }
+        else if (availSpace >= 5 && !cebChanged && !e1bChanged)
+        {
+            option->SetLength(5);
+        }
+        else
+        {
+            // Cannot fit changed counters
+            return;
+        }
+        header.AppendOption(option);
+        NS_LOG_INFO(m_node->GetId() << " Add option AccEcn0 (len "
+                                    << static_cast<int>(option->GetLength())
+                                    << "), r.e0b=" << e0b << " r.ceb=" << ceb << " r.e1b=" << e1b);
+    }
 }
 
 void
@@ -5189,20 +5271,34 @@ TcpSocketBase::ProcessOptionAccEcn(const Ptr<const TcpOption> option, uint32_t n
 {
     Ptr<const TcpOptionAccEcn> accEcnOption = DynamicCast<const TcpOptionAccEcn>(option);
     NS_LOG_FUNCTION(this << accEcnOption);
-    uint32_t DIVOPT = 2 << 23;
+    if (!accEcnOption)
+    {
+        return;
+    }
+
+    uint32_t DIVOPT = 1 << 24;
     if (newlyAckedB > 0)
     {
-        uint32_t e0bD =
-            (accEcnOption->GetE0B() + DIVOPT - (m_accEcnData->m_ecnE0bS % DIVOPT)) % DIVOPT;
-        m_accEcnData->m_ecnE0bS += e0bD;
+        if (accEcnOption->HasE0B())
+        {
+            uint32_t e0bD =
+                (accEcnOption->GetE0B() + DIVOPT - (m_accEcnData->m_ecnE0bS % DIVOPT)) % DIVOPT;
+            m_accEcnData->m_ecnE0bS += e0bD;
+        }
 
-        uint32_t cebD =
-            (accEcnOption->GetCEB() + DIVOPT - (m_accEcnData->m_ecnCebS % DIVOPT)) % DIVOPT;
-        m_accEcnData->m_ecnCebS += cebD;
+        if (accEcnOption->HasCEB())
+        {
+            uint32_t cebD =
+                (accEcnOption->GetCEB() + DIVOPT - (m_accEcnData->m_ecnCebS % DIVOPT)) % DIVOPT;
+            m_accEcnData->m_ecnCebS += cebD;
+        }
 
-        uint32_t e1bD =
-            (accEcnOption->GetE1B() + DIVOPT - (m_accEcnData->m_ecnE1bS % DIVOPT)) % DIVOPT;
-        m_accEcnData->m_ecnE1bS += e1bD;
+        if (accEcnOption->HasE1B())
+        {
+            uint32_t e1bD =
+                (accEcnOption->GetE1B() + DIVOPT - (m_accEcnData->m_ecnE1bS % DIVOPT)) % DIVOPT;
+            m_accEcnData->m_ecnE1bS += e1bD;
+        }
     }
 
     NS_LOG_INFO(m_node->GetId() << " Decode option AccEcn, s.e0b=" << m_accEcnData->m_ecnE0bS
