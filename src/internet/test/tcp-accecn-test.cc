@@ -298,6 +298,8 @@ class TcpSocketAccEcnTester : public TcpSocketBase
     using TcpSocketBase::m_highRxAckMark;
     using TcpSocketBase::ReTxTimeout;
     using TcpSocketBase::m_sackEnabled;
+    using TcpSocketBase::m_dsackEnabled;
+    using TcpSocketBase::AddOptionSack;
     using TcpSocketBase::AddOptionAccEcn;
 
     /**
@@ -1519,6 +1521,29 @@ class TcpAccEcnOptionTest : public TestCase
         NS_TEST_ASSERT_MSG_EQ(h2.HasOption(TcpOption::ACCECN0),
                               false,
                               "AccECN option must be omitted when SACK loss feedback takes precedence");
+
+        // When D-SACK is pending, it also takes precedence over AccECN options
+        TcpHeader h3;
+        h3.SetFlags(TcpHeader::ACK);
+        s->m_dsackEnabled = true;
+        s->m_tcb->m_rxBuffer->UpdateDsackList(SequenceNumber32(500), SequenceNumber32(1500));
+        h3.AppendOption(ts);
+        h3.AppendOption(ts2);
+        s->AddOptionAccEcn(h3);
+        NS_TEST_ASSERT_MSG_EQ(h3.HasOption(TcpOption::ACCECN0) || h3.HasOption(TcpOption::ACCECN1),
+                              false,
+                              "AccECN option must be omitted when D-SACK takes precedence");
+
+        // Verify that D-SACK block is placed as the first block in the unified SACK option per RFC 2883
+        TcpHeader ackH;
+        ackH.SetFlags(TcpHeader::ACK);
+        s->m_tcb->m_rxBuffer->UpdateDsackList(SequenceNumber32(100), SequenceNumber32(200));
+        s->AddOptionSack(ackH);
+        NS_TEST_ASSERT_MSG_EQ(ackH.HasOption(TcpOption::SACK), true, "Header must have SACK option");
+        Ptr<const TcpOptionSack> sackOpt = DynamicCast<const TcpOptionSack>(ackH.GetOption(TcpOption::SACK));
+        NS_TEST_ASSERT_MSG_EQ(sackOpt != nullptr, true, "SACK option must cast correctly");
+        NS_TEST_ASSERT_MSG_EQ(sackOpt->GetSackList().front().first, SequenceNumber32(100), "First block must be D-SACK block");
+        NS_TEST_ASSERT_MSG_EQ(sackOpt->GetSackList().front().second, SequenceNumber32(200), "First block must match D-SACK range");
     }
 };
 

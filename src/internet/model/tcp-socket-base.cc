@@ -154,6 +154,11 @@ TcpSocketBase::GetTypeId()
                           BooleanValue(true),
                           MakeBooleanAccessor(&TcpSocketBase::m_timestampEnabled),
                           MakeBooleanChecker())
+            .AddAttribute("DSack",
+                          "Enable or disable D-SACK option",
+                          BooleanValue(true),
+                          MakeBooleanAccessor(&TcpSocketBase::m_dsackEnabled),
+                          MakeBooleanChecker())
             .AddAttribute("Fack",
                           "Enable or disable FACK option",
                           BooleanValue(false),
@@ -450,6 +455,7 @@ TcpSocketBase::TcpSocketBase(const TcpSocketBase& sock)
       m_sndWindShift(sock.m_sndWindShift),
       m_timestampEnabled(sock.m_timestampEnabled),
       m_timestampToEcho(sock.m_timestampToEcho),
+      m_dsackEnabled(sock.m_dsackEnabled),
       m_fackEnabled(sock.m_fackEnabled),
       m_recover(sock.m_recover),
       m_recoverActive(sock.m_recoverActive),
@@ -1405,6 +1411,17 @@ TcpSocketBase::IsValidTcpSegment(const SequenceNumber32 seq,
                                 << ":" << seq + tcpPayloadSize << ") out of range ["
                                 << m_tcb->m_rxBuffer->NextRxSequence() << ":"
                                 << m_tcb->m_rxBuffer->MaxRxSequence() << ")");
+
+        // Received a duplicate packet. Update parameters for D-SACK
+        if (m_sackEnabled && m_dsackEnabled &&
+            (seq.GetValue() + tcpPayloadSize < m_tcb->m_rxBuffer->NextRxSequence().GetValue() ||
+             m_tcb->m_rxBuffer->MaxRxSequence().GetValue() <= seq.GetValue()))
+        {
+            m_tcb->m_rxBuffer->SetDsackStatus(true);
+            m_dsackLeftEdge = seq;
+            m_dsackRightEdge = seq + m_tcb->m_segmentSize;
+            m_tcb->m_rxBuffer->UpdateDsackList(m_dsackLeftEdge, m_dsackRightEdge);
+        }
         // Acknowledgement should be sent for all unacceptable packets (RFC793, p.69)
         SendEmptyPacket(TcpHeader::ACK);
         return false;
@@ -2958,7 +2975,6 @@ TcpSocketBase::SendEmptyPacket(uint16_t flags)
         { // The window scaling option is set only on SYN packets
             AddOptionWScale(header);
         }
-
         if (m_sackEnabled)
         {
             AddOptionSackPermitted(header);
@@ -3001,7 +3017,8 @@ TcpSocketBase::SendEmptyPacket(uint16_t flags)
         {
             m_highTxAck = header.GetAckNumber();
         }
-        if (m_sackEnabled && m_tcb->m_rxBuffer->GetSackListSize() > 0)
+        if (m_sackEnabled && (m_tcb->m_rxBuffer->GetSackListSize() > 0 ||
+                              (m_dsackEnabled && m_tcb->m_rxBuffer->GetDsackStatus())))
         {
             AddOptionSack(header);
         }
@@ -4644,15 +4661,29 @@ TcpSocketBase::AddOptionSack(TcpHeader& header)
     uint8_t optionLenAvail = header.GetMaxOptionLength() - header.GetOptionLength();
     uint8_t allowedSackBlocks = (optionLenAvail - 2) / 8;
 
+    bool hasDsack = m_dsackEnabled && m_tcb->m_rxBuffer->GetDsackStatus();
     TcpOptionSack::SackList sackList = m_tcb->m_rxBuffer->GetSackList();
-    if (allowedSackBlocks == 0 || sackList.empty())
+
+    if (allowedSackBlocks == 0 || (!hasDsack && sackList.empty()))
     {
         NS_LOG_LOGIC("No space available or sack list empty, not adding sack blocks");
         return;
     }
 
-    // Append the allowed number of SACK blocks
+    // Append the allowed number of SACK blocks in a single TCP option
     Ptr<TcpOptionSack> option = CreateObject<TcpOptionSack>();
+
+    // RFC 2883: When D-SACK is used, the first block of the SACK option is the D-SACK block
+    if (hasDsack)
+    {
+        TcpOptionSack::SackList dsackList = m_tcb->m_rxBuffer->GetDsackList();
+        if (!dsackList.empty() && allowedSackBlocks > 0)
+        {
+            option->AddSackBlock(dsackList.front());
+            allowedSackBlocks--;
+        }
+        m_tcb->m_rxBuffer->SetDsackStatus(false);
+    }
 
     for (auto i = sackList.begin(); allowedSackBlocks > 0 && i != sackList.end(); ++i)
     {
@@ -4662,6 +4693,12 @@ TcpSocketBase::AddOptionSack(TcpHeader& header)
 
     header.AppendOption(option);
     NS_LOG_INFO(m_node->GetId() << " Add option SACK " << *option);
+}
+
+void
+TcpSocketBase::AddDsack(TcpHeader& header)
+{
+    AddOptionSack(header);
 }
 
 void
@@ -5181,8 +5218,9 @@ TcpSocketBase::AddOptionAccEcn(TcpHeader& header)
     uint8_t maxOptLength = header.GetMaxOptionLength();
     int availSpace = maxOptLength - currentOptLength;
 
-    // SACK loss feedback (18B for 2 blocks) takes precedence over AccECN options (RFC 9768 Section 3.2.3.3)
-    if (m_sackEnabled && m_tcb->m_rxBuffer->GetSackListSize() > 0)
+    // SACK / D-SACK loss feedback takes precedence over AccECN options (RFC 9768 Section 3.2.3.3)
+    if (m_sackEnabled && (m_tcb->m_rxBuffer->GetSackListSize() > 0 ||
+                          (m_dsackEnabled && m_tcb->m_rxBuffer->GetDsackStatus())))
     {
         availSpace -= 18;
     }
@@ -5199,9 +5237,9 @@ TcpSocketBase::AddOptionAccEcn(TcpHeader& header)
     uint32_t ceb = m_accEcnData->m_ecnCebR % DIVOPT;
     uint32_t e1b = m_accEcnData->m_ecnE1bR % DIVOPT;
 
-    bool e0bChanged = (m_accEcnData->m_ecnE0bR != 1);
-    bool cebChanged = (m_accEcnData->m_ecnCebR != 0);
-    bool e1bChanged = (m_accEcnData->m_ecnE1bR != 1);
+    bool e0bChanged = (m_accEcnData->m_ecnE0bR != 1u);
+    bool cebChanged = (m_accEcnData->m_ecnCebR != 0u);
+    bool e1bChanged = (m_accEcnData->m_ecnE1bR != 1u);
 
     // Decide whether to use Order 0 (AccECN0) or Order 1 (AccECN1)
     bool useOrder1 = e1bChanged && !e0bChanged;

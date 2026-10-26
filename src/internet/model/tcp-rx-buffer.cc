@@ -133,6 +133,18 @@ TcpRxBuffer::Finished()
 }
 
 bool
+TcpRxBuffer::GetDsackStatus() const
+{
+    return this->isDsackSeen;
+}
+
+void
+TcpRxBuffer::SetDsackStatus(bool status)
+{
+    this->isDsackSeen = status;
+}
+
+bool
 TcpRxBuffer::Add(Ptr<Packet> p, const TcpHeader& tcph)
 {
     NS_LOG_FUNCTION(this << p << tcph);
@@ -142,6 +154,30 @@ TcpRxBuffer::Add(Ptr<Packet> p, const TcpHeader& tcph)
     SequenceNumber32 tailSeq = headSeq + SequenceNumber32(pktSize);
     NS_LOG_LOGIC("Add pkt " << p << " len=" << pktSize << " seq=" << headSeq
                             << ", when NextRxSeq=" << m_nextRxSeq << ", buffsize=" << m_size);
+
+    if (tailSeq < m_nextRxSeq || MaxRxSequence() <= headSeq)
+    {
+        UpdateDsackList(headSeq, tailSeq);
+    }
+    else if (!m_data.empty())
+    {
+        for (const auto& [storedStart, packet] : m_data)
+        {
+            auto storedEnd = storedStart + packet->GetSize();
+
+            if (headSeq < storedEnd && tailSeq > storedStart)
+            {
+                SequenceNumber32 overlapStart = std::max(headSeq, storedStart);
+                SequenceNumber32 overlapEnd = std::min(tailSeq, storedEnd);
+
+                if (overlapStart < overlapEnd)
+                {
+                    UpdateDsackList(overlapStart, overlapEnd);
+                    break;
+                }
+            }
+        }
+    }
 
     // Trim packet to fit Rx window specification
     if (headSeq < m_nextRxSeq)
@@ -238,6 +274,20 @@ TcpRxBuffer::GetSackListSize() const
     NS_LOG_FUNCTION(this);
 
     return static_cast<uint32_t>(m_sackList.size());
+}
+
+void
+TcpRxBuffer::UpdateDsackList(const SequenceNumber32& leftEdge, const SequenceNumber32& rightEdge)
+{
+    TcpOptionSack::SackBlock dsackBlock{leftEdge, rightEdge};
+    m_dsackList.assign(1, dsackBlock);
+    isDsackSeen = true;
+}
+
+TcpOptionSack::SackList
+TcpRxBuffer::GetDsackList() const
+{
+    return m_dsackList;
 }
 
 void

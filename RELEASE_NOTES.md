@@ -152,6 +152,7 @@ Numbers preceded by '#' reference GitLab.com Issue numbers (for more information
 - (applications) !2611 New IEEE 802.11ax evaluation methodology traffic generators for video, VoIP, virtual desktop, and real-time mobile gaming
 - (core) !2633 Added `SystemPath::FindSelf()` to retrieve the full path to the running executable.
 - (examples) !2686 New TCP BBR Python example program.
+- (internet) !2406 Added support for TCP D-SACK option (RFC 2883).
 - (internet) !2405 Added support for TCP FACK (Forward Acknowledgement).
 - (internet) !2530 Added IPv6 support to Global Routing.
 - (internet) !2434 Added `PrintRouting` functionality to `GlobalRouting` similar to `TraceRoute`.

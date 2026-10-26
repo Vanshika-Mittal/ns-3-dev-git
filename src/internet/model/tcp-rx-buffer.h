@@ -160,6 +160,16 @@ class TcpRxBuffer : public Object
     TcpOptionSack::SackList GetSackList() const;
 
     /**
+     * @brief Get the D-SACK list
+     *
+     * The D-SACK list can be empty, and it is updated once duplicate packet
+     * is received.
+     *
+     * @return a list of isolated blocks
+     */
+    TcpOptionSack::SackList GetDsackList() const;
+
+    /**
      * @brief Get the size of Sack list
      *
      * @return the size of the sack block list; can be empty
@@ -174,6 +184,25 @@ class TcpRxBuffer : public Object
     {
         return m_gotFin;
     }
+
+    /**
+     * @brief Update the D-SACK list, with the block seq starting at the beginning
+     * @param leftEdge sequence number of the block at the beginning
+     * @param rightEdge sequence number of the block at the end
+     */
+    void UpdateDsackList(const SequenceNumber32& leftEdge, const SequenceNumber32& rightEdge);
+
+    /**
+     * @brief Records whether D-SACK is seen or not
+     * @param status status whether D-SACK is seen(true) or not(false)
+     */
+    void SetDsackStatus(bool status);
+
+    /**
+     * @brief Provide information whether D-SACK is seen or not
+     * @return the status whether D-SACK is seen(true) or not(false)
+     */
+    bool GetDsackStatus() const;
 
   private:
     /**
@@ -209,7 +238,9 @@ class TcpRxBuffer : public Object
      */
     void ClearSackList(const SequenceNumber32& seq);
 
-    TcpOptionSack::SackList m_sackList; //!< Sack list (updated constantly)
+    bool isDsackSeen = false;            //!< Status whether duplicate segment is seen or not
+    TcpOptionSack::SackList m_dsackList; //!< Stores the information for D-SACK block
+    TcpOptionSack::SackList m_sackList;  //!< Sack list (updated constantly)
 
     /// container for data stored in the buffer
     typedef std::map<SequenceNumber32, Ptr<Packet>>::iterator BufIterator;
