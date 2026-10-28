@@ -8,18 +8,17 @@
  *          Mohit P. Tahiliani <tahiliani.nitk@gmail.com>
  */
 
-// This program simulates an Accurate ECN scenario over a bottleneck link:
+// This program simulates Accurate ECN test cases over a 4-node bottleneck topology:
 //
-//           1000 Mbps           10 Mbps          1000 Mbps
-//  Sender -------------- R1 -------------- R2 -------------- Receiver
-//              5ms               10ms               5ms
+//           1000 Mbps           Bottleneck (10/1 Mbps)         1000 Mbps
+//  Sender -------------- R1 -------------------------- R2 -------------- Receiver
+//              2ms                       10ms                      2ms
 //
-// The link between R1 and R2 is a bottleneck link with RED AQM configured to mark packets
-// with ECN when the queue builds up.
-//
-// Accurate ECN (AccECN) provides byte-accurate, fine-grained congestion feedback
-// by carrying a 3-bit ACE counter in the TCP header and tracing detailed byte counters
-// (Cep, E0b, E1b, Ceb).
+// Supported Test Cases:
+//   Case 1: AccECN Normal Negotiation (AccECN <-> AccECN, 10 Mbps, 300 KB)
+//   Case 2: AccECN Congestion & CE Marking (AccECN <-> AccECN, 1 Mbps, Unlimited data, aggressive RED)
+//   Case 3: AccECN Fallback to Classic ECN (AccECN <-> ClassicEcn, 10 Mbps, 200 KB)
+//   Case 4: AccECN Fallback to Non-ECN (AccECN <-> NoEcn, 10 Mbps, 200 KB)
 
 #include "ns3/applications-module.h"
 #include "ns3/core-module.h"
@@ -30,16 +29,20 @@
 #include "ns3/traffic-control-module.h"
 
 #include <filesystem>
+#include <iomanip>
+#include <iostream>
 
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("TcpAccEcnExample");
 
+// All the pcaps will be collected in a folder named accecn in the ns-3 root directory.
+std::string dir = "accecn/";
+
 static void
 CwndTracer(uint32_t oldval, uint32_t newval)
 {
-    NS_LOG_INFO("At " << Simulator::Now().GetSeconds() << "s, cwnd changed: " << oldval << " -> "
-                      << newval);
+    NS_LOG_INFO("At " << Simulator::Now().GetSeconds() << "s, cwnd: " << oldval << " -> " << newval);
 }
 
 static void
@@ -50,44 +53,113 @@ TraceSocketAccEcn(Ptr<Node> node)
                                    MakeCallback(&CwndTracer));
 }
 
-int
-main(int argc, char* argv[])
+void
+RunCase(uint32_t caseId,
+        const std::string& tcpTypeId,
+        bool enablePcap,
+        const std::string& baseDir,
+        bool enableOptions)
 {
-    std::string tcpTypeId = "TcpCubic";
-    bool enableAccEcn = true;
-    bool enablePcap = true;
-    std::string pcapDir = "pcap_results";
-    bool enableOptions = false; // By default without standard options (TS, SACK, WinScale)
-    double stopTime = 10.0;
+    std::string caseTitle;
+    std::string caseDir;
+    std::string bottleneckBw = "10Mbps";
+    uint64_t maxBytes = 0;
+    double stopTime = 5.0;
 
-    CommandLine cmd(__FILE__);
-    cmd.AddValue("tcpTypeId", "TCP variant to use", tcpTypeId);
-    cmd.AddValue("enableAccEcn", "Enable Accurate ECN on TCP sockets", enableAccEcn);
-    cmd.AddValue("pcap", "Enable PCAP packet capture", enablePcap);
-    cmd.AddValue("pcapDir", "Directory to store PCAP files", pcapDir);
-    cmd.AddValue("enableOptions", "Enable standard TCP options (Timestamp, SACK, WinScale)", enableOptions);
-    cmd.AddValue("stopTime", "Stop time of the simulation (seconds)", stopTime);
-    cmd.Parse(argc, argv);
+    TcpSocketBase::EcnMode_t senderEcnMode = TcpSocketBase::AccEcn;
+    TcpSocketState::UseEcn_t senderUseEcn = TcpSocketState::On;
+
+    TcpSocketBase::EcnMode_t receiverEcnMode = TcpSocketBase::AccEcn;
+    TcpSocketState::UseEcn_t receiverUseEcn = TcpSocketState::On;
+
+    bool redUseHardDrop = true;
+    double redMinTh = 5;
+    double redMaxTh = 15;
+    double redQw = 0.002;
+
+    switch (caseId)
+    {
+    case 1:
+        caseTitle = "Case 1: AccECN Normal Negotiation";
+        caseDir = "case1_accecn_normal";
+        bottleneckBw = "10Mbps";
+        maxBytes = 300000; // 300 KB
+        stopTime = 5.0;
+        receiverEcnMode = TcpSocketBase::AccEcn;
+        receiverUseEcn = TcpSocketState::On;
+        redMinTh = 5;
+        redMaxTh = 15;
+        redQw = 0.002;
+        break;
+
+    case 2:
+        caseTitle = "Case 2: AccECN Congestion (CE Marking)";
+        caseDir = "case2_accecn_congestion";
+        bottleneckBw = "1Mbps"; // Slow bottleneck to force queue buildup
+        maxBytes = 0;          // Unlimited data
+        stopTime = 10.0;
+        receiverEcnMode = TcpSocketBase::AccEcn;
+        receiverUseEcn = TcpSocketState::On;
+        redUseHardDrop = false; // No packet drops above MaxTh; mark all
+        redMinTh = 1;
+        redMaxTh = 5;
+        redQw = 0.1;
+        break;
+
+    case 3:
+        caseTitle = "Case 3: AccECN Fallback to Classic ECN (RFC 3168)";
+        caseDir = "case3_classic_ecn_fallback";
+        bottleneckBw = "10Mbps";
+        maxBytes = 200000; // 200 KB
+        stopTime = 5.0;
+        receiverEcnMode = TcpSocketBase::ClassicEcn;
+        receiverUseEcn = TcpSocketState::On;
+        redMinTh = 5;
+        redMaxTh = 15;
+        redQw = 0.002;
+        break;
+
+    case 4:
+        caseTitle = "Case 4: AccECN Fallback to Non-ECN";
+        caseDir = "case4_no_ecn_fallback";
+        bottleneckBw = "10Mbps";
+        maxBytes = 200000; // 200 KB
+        stopTime = 5.0;
+        receiverEcnMode = TcpSocketBase::NoEcn;
+        receiverUseEcn = TcpSocketState::Off;
+        redMinTh = 5;
+        redMaxTh = 15;
+        redQw = 0.002;
+        break;
+
+    default:
+        std::cerr << "Unknown case ID: " << caseId << "\n";
+        return;
+    }
+
+    std::string pcapDir = baseDir + caseDir + "/pcap/";
+
+    std::cout << "\n======================================================================\n";
+    std::cout << " Running " << caseTitle << " ...\n";
+    std::cout << "======================================================================\n";
 
     Config::SetDefault("ns3::TcpL4Protocol::SocketType",
                        TypeIdValue(TypeId::LookupByName("ns3::" + tcpTypeId)));
 
-    if (enableAccEcn)
-    {
-        Config::SetDefault("ns3::TcpSocketBase::EcnMode", EnumValue(TcpSocketBase::AccEcn));
-        Config::SetDefault("ns3::TcpSocketBase::UseEcn", EnumValue(TcpSocketState::On));
-    }
-
     if (!enableOptions)
     {
-        // Disable standard TCP options so packets contain only standard TCP header and AccECN flags
+        // Disable standard TCP options for clean header inspection
         Config::SetDefault("ns3::TcpSocketBase::Timestamp", BooleanValue(false));
         Config::SetDefault("ns3::TcpSocketBase::Sack", BooleanValue(false));
         Config::SetDefault("ns3::TcpSocketBase::WindowScaling", BooleanValue(false));
     }
 
-    // Set the device queue to 1 packet so packets back up in the RED QueueDisc
+    // Force packets to queue in the RED QueueDisc
     Config::SetDefault("ns3::DropTailQueue<Packet>::MaxSize", QueueSizeValue(QueueSize("1p")));
+
+    // Receiver ECN defaults for listening socket
+    Config::SetDefault("ns3::TcpSocketBase::EcnMode", EnumValue(receiverEcnMode));
+    Config::SetDefault("ns3::TcpSocketBase::UseEcn", EnumValue(receiverUseEcn));
 
     NodeContainer nodes;
     nodes.Create(4);
@@ -98,10 +170,10 @@ main(int argc, char* argv[])
 
     PointToPointHelper accessLink;
     accessLink.SetDeviceAttribute("DataRate", StringValue("1000Mbps"));
-    accessLink.SetChannelAttribute("Delay", StringValue("5ms"));
+    accessLink.SetChannelAttribute("Delay", StringValue("2ms"));
 
     PointToPointHelper bottleneckLink;
-    bottleneckLink.SetDeviceAttribute("DataRate", StringValue("10Mbps"));
+    bottleneckLink.SetDeviceAttribute("DataRate", StringValue(bottleneckBw));
     bottleneckLink.SetChannelAttribute("Delay", StringValue("10ms"));
 
     NetDeviceContainer d0d1 = accessLink.Install(sender, r1);
@@ -116,24 +188,26 @@ main(int argc, char* argv[])
     tchRed.SetRootQueueDisc("ns3::RedQueueDisc",
                             "UseEcn",
                             BooleanValue(true),
+                            "UseHardDrop",
+                            BooleanValue(redUseHardDrop),
                             "LinkBandwidth",
-                            DataRateValue(DataRate("10Mbps")),
+                            DataRateValue(DataRate(bottleneckBw)),
                             "LinkDelay",
                             TimeValue(MilliSeconds(10)),
                             "MinTh",
-                            DoubleValue(2),
+                            DoubleValue(redMinTh),
                             "MaxTh",
-                            DoubleValue(8),
+                            DoubleValue(redMaxTh),
                             "QW",
-                            DoubleValue(0.05),
+                            DoubleValue(redQw),
                             "MaxSize",
                             StringValue("100p"));
     tchRed.Install(d1d2);
 
     if (enablePcap)
     {
-        std::filesystem::create_directories(pcapDir);
-        bottleneckLink.EnablePcapAll(pcapDir + "/tcp-accecn");
+        ns3::SystemPath::MakeDirectories(pcapDir);
+        bottleneckLink.EnablePcapAll(pcapDir + "tcp-accecn");
     }
 
     Ipv4AddressHelper address;
@@ -156,11 +230,42 @@ main(int argc, char* argv[])
     sinkApps.Start(Seconds(0.0));
     sinkApps.Stop(Seconds(stopTime));
 
+    // Configure Sender ECN mode for the sending socket
+    Config::SetDefault("ns3::TcpSocketBase::EcnMode", EnumValue(senderEcnMode));
+    Config::SetDefault("ns3::TcpSocketBase::UseEcn", EnumValue(senderUseEcn));
+
     BulkSendHelper source("ns3::TcpSocketFactory", sinkAddress);
-    source.SetAttribute("MaxBytes", UintegerValue(0));
+    source.SetAttribute("MaxBytes", UintegerValue(maxBytes));
     ApplicationContainer sourceApps = source.Install(sender);
     sourceApps.Start(Seconds(1.0));
     sourceApps.Stop(Seconds(stopTime));
+
+    // Ensure sockets get the exact designated ECN mode
+    Simulator::Schedule(Seconds(0.001), [sinkApps, receiverEcnMode, receiverUseEcn]() {
+        Ptr<PacketSink> sink = DynamicCast<PacketSink>(sinkApps.Get(0));
+        if (sink && sink->GetListeningSocket())
+        {
+            Ptr<TcpSocketBase> tcp = DynamicCast<TcpSocketBase>(sink->GetListeningSocket());
+            if (tcp)
+            {
+                tcp->SetEcnMode(receiverEcnMode);
+                tcp->SetUseEcn(receiverUseEcn);
+            }
+        }
+    });
+
+    Simulator::Schedule(Seconds(1.0001), [sourceApps, senderEcnMode, senderUseEcn]() {
+        Ptr<BulkSendApplication> bulk = DynamicCast<BulkSendApplication>(sourceApps.Get(0));
+        if (bulk && bulk->GetSocket())
+        {
+            Ptr<TcpSocketBase> tcp = DynamicCast<TcpSocketBase>(bulk->GetSocket());
+            if (tcp)
+            {
+                tcp->SetEcnMode(senderEcnMode);
+                tcp->SetUseEcn(senderUseEcn);
+            }
+        }
+    });
 
     Simulator::Schedule(Seconds(1.0001), &TraceSocketAccEcn, sender);
 
@@ -168,10 +273,62 @@ main(int argc, char* argv[])
     Simulator::Run();
 
     Ptr<PacketSink> sink = DynamicCast<PacketSink>(sinkApps.Get(0));
-    std::cout << "Accurate ECN Example Simulation Finished.\n";
-    std::cout << "Total Bytes Received: " << sink->GetTotalRx() << " bytes\n";
-    std::cout << "Goodput: " << (sink->GetTotalRx() * 8.0) / ((stopTime - 1.0) * 1e6) << " Mbps\n";
+    std::cout << " Simulation Complete:\n";
+    std::cout << "  - Total Bytes Received: " << sink->GetTotalRx() << " bytes\n";
+    std::cout << "  - Goodput:              "
+              << (sink->GetTotalRx() * 8.0) / ((stopTime - 1.0) * 1e6) << " Mbps\n";
+    if (enablePcap)
+    {
+        std::cout << "  - PCAP Files Saved in:  " << pcapDir << "\n";
+    }
 
     Simulator::Destroy();
+}
+
+int
+main(int argc, char* argv[])
+{
+    std::string tcpTypeId = "TcpCubic";
+    uint32_t testCase = 0; // 0 means run ALL 4 cases, 1..4 runs a specific case
+    bool enablePcap = true;
+    bool enableOptions = false; // By default without standard options (Timestamp, SACK, WinScale)
+
+    time_t rawtime;
+    struct tm* timeinfo;
+    char buffer[80];
+
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+
+    strftime(buffer, sizeof(buffer), "%d-%m-%Y-%I-%M-%S", timeinfo);
+    std::string currentTime(buffer);
+
+    dir += (currentTime + "/");
+
+    CommandLine cmd(__FILE__);
+    cmd.AddValue("tcpTypeId", "TCP variant to use (e.g. TcpCubic, TcpLinuxReno)", tcpTypeId);
+    cmd.AddValue("testCase", "Test case to run (1..4, or 0 for ALL cases)", testCase);
+    cmd.AddValue("pcap", "Enable PCAP packet capture", enablePcap);
+    cmd.AddValue("enableOptions",
+                 "Enable standard TCP options (Timestamp, SACK, WinScale)",
+                 enableOptions);
+    cmd.AddValue("dir", "Base directory for PCAP traces", dir);
+    cmd.Parse(argc, argv);
+
+    if (testCase == 0)
+    {
+        std::cout << "\n======================================================================\n";
+        std::cout << " RUNNING ALL 4 ACCECN TEST CASES\n";
+        std::cout << "======================================================================\n";
+        for (uint32_t c = 1; c <= 4; ++c)
+        {
+            RunCase(c, tcpTypeId, enablePcap, dir, enableOptions);
+        }
+    }
+    else
+    {
+        RunCase(testCase, tcpTypeId, enablePcap, dir, enableOptions);
+    }
+
     return 0;
 }
