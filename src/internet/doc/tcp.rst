@@ -50,7 +50,7 @@ HighSpeed TCP (YeAH), Illinois, H-TCP, Low Extra Delay Background Transport
 (LEDBAT), TCP Low Priority (TCP-LP), Data Center TCP (DCTCP) and Bottleneck
 Bandwidth and RTT (BBR) also supported. The model also supports Selective
 Acknowledgements (SACK), Forward Acknowledgement (FACK), Duplicate Selective Acknowledgement (D-SACK),
-Proportional Rate Reduction (PRR) and Explicit Congestion Notification (ECN).
+Proportional Rate Reduction (PRR), Explicit Congestion Notification (ECN), and Accurate ECN (AccECN).
 Multipath-TCP is not yet supported in the |ns3| releases.
 
 Model history
@@ -1187,7 +1187,7 @@ The following enum represents the mode of ECN::
   {
       ClassicEcn,  //!< ECN functionality as described in RFC 3168.
       DctcpEcn,    //!< ECN functionality as described in RFC 8257. Note: this mode is specific to DCTCP.
-      AccEcn,      //!< ECN functionality as described in draft-ietf-tcpm-accurate-ecn.
+      AccEcn,      //!< ECN functionality as described in RFC 9768.
   };
 
 The following are some important ECN parameters::
@@ -1326,7 +1326,7 @@ Some new TCP mechanisms like Congestion Exposure (ConEx), Data Center TCP (DCTCP
 or Low Latency Low Loss Scalable Throughput (L4S) need more accurate
 ECN feedback information whenever more than one marking is received in one RTT.
 AccEcn provides more than one feedback signal per RTT in the TCP header.
-More information is available in the AccEcn draft: https://tools.ietf.org/html/draft-ietf-tcpm-accurate-ecn-07
+More information is available in RFC 9768: https://www.rfc-editor.org/rfc/rfc9768.html
 
 Enabling AccEcn
 ^^^^^^^^^^^^^^^
@@ -1355,6 +1355,11 @@ CWR + ECE + AE are set if the sender is AccEcn enabled.
       SendEmptyPacket(TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR | TcpHeader::AE);
   }
 
+Per RFC 9768 Section 3.1.3, a receiver interprets any combination of (AE, CWR, ECE)
+on the SYN other than (0, 0, 0) or (0, 1, 1) as an AccECN request.
+If the client offers (0, 1, 1), the server falls back to Classic ECN (RFC 3168).
+If the client offers (0, 0, 0), the server falls back to non-ECN.
+
 2. Receiver sends SYN + ACK:
 Receiver sets the corresponding CWR, ECE and AE bits
 to feedback what ECN marking was received on the SYN packet to the sender.
@@ -1377,6 +1382,11 @@ to feedback what ECN marking was received on the SYN packet to the sender.
   {
       SendEmptyPacket(TcpHeader::SYN | TcpHeader::ACK | TcpHeader::CWR);
   }
+
+If the server reflects (0, 1, 1), the client falls back to Classic ECN.
+If the server reflects (0, 0, 0) or broken reflection (1, 1, 1), the client disables ECN.
+If a CE mark was received on the SYN, the sender reduces its initial window (IW) to 1 SMSS
+(Section 3.2.2.2). An invalid transition between Not-ECT and ECT indicates mangling (Section 3.2.2.3).
 
 3. Sender sends ACK:
 A host MUST interpret the AE, CWR and ECE flags as the 3-bit ACE
@@ -1419,10 +1429,18 @@ Each data receiver of each half connection maintains four counters,
 1. The CE packet counter (``r.cep``), counts the number of packets the host receives with
    the CE code point in the IP ECN field, including CE marks on control packets without data.
 2. ``r.ceb``, ``r.e0b`` and ``r.e1b`` count the number of TCP payload bytes in packets marked
-   respectively with the CE, ECT(0) and ECT(1) codepoint in their IP-ECN field.
+   respectively with the CE, ECT(0) and ECT(1) codepoints in their IP-ECN field.
+
+Per RFC 9768 Section 3.2.1, counters are initialized upon connection setup:
+* ``r.cep`` = 5 (or 6 if CE was on SYN)
+* ``r.e0b`` = 1
+* ``r.e1b`` = 1
+* ``r.ceb`` = 0
 
 These counters are maintained in ``Ptr<TcpAccEcnData> m_accEcnData`` in ``TcpSocketBase``.
-``r.cep`` is reflected in the 3-bit ACE field in the TCP header.
+``r.cep`` is reflected in the 3-bit ACE field in the TCP header modulo 8.
+Incoming AccECN ACKs are decoded via the ACE counter and do not trigger classic RFC 3168
+ECE congestion window halving.
 
 AccEcn TCP Option
 ^^^^^^^^^^^^^^^^^
@@ -1433,16 +1451,23 @@ ECN feedback. RFC 9768 defines two dedicated standard option kinds: ``ns3::TcpOp
 ``ns3::TcpOptionAccEcn``. They carry the ECT(0), CE, and ECT(1) byte counters (``r.e0b``,
 ``r.ceb``, ``r.e1b``) as 24-bit big-endian fields in lengths of 11, 8, 5, or 2 bytes.
 
-AccEcn compliance
-^^^^^^^^^^^^^^^^^
+When TCP option space in the header is constrained by the 40-byte ceiling, SACK loss
+feedback options take precedence over AccECN options (RFC 9768 Section 3.2.3.3),
+causing AccECN options to be truncated (to 8 or 5 bytes) or omitted while the 3-bit ACE
+field continues providing feedback.
 
-Based on the suggestions provided in the AccEcn draft, the following behavior has
-been implemented:
+RFC 9768 compliance
+^^^^^^^^^^^^^^^^^^^
 
-1. During negotiation, end points use 3 bits (ECE, CWR and AE) in the TCP header
-   to perform AccEcn negotiation; after negotiation, the end point encodes ``r.cep`` into
-   these 3 bits, named ACE, to feedback how many packets were received with CE mark.
-2. AccEcn counters maintain both packet-based and byte-based ECN marking counts.
+Based on RFC 9768, the following behavior has been implemented:
+
+1. End points negotiate AccECN using flags (AE, CWR, ECE), with fallback to Classic ECN
+   or non-ECN when the peer lacks AccECN support.
+2. Post-handshake, the receiver continuously encodes ``r.cep`` modulo 8 into the 3-bit ACE field.
+3. Byte-accurate counters (ECT0, CE, ECT1) are delivered using standard TCP options
+   (Kinds 172 and 174) with SACK precedence space budgeting.
+4. Unit test coverage is available in ``src/internet/test/tcp-accecn-test.cc``.
+5. Example simulation programs are available in ``examples/tcp/tcp-accecn-example.cc``.
 
 Support for Dynamic Pacing
 ++++++++++++++++++++++++++
